@@ -5,6 +5,7 @@ const axios = require('axios');
 const fetch = require('node-fetch');
 const path = require('path');
 const riddlesFile = path.join(__dirname, 'riddles.json');
+const fs = require('fs');
 const port = 3000;
 
 app.use(cors());
@@ -28,10 +29,10 @@ app.get('/riddle', (req, res) => {
       }
       const randomIndex = Math.floor(Math.random() * riddles.length);
       const riddle = riddles[randomIndex];
-      res.json(riddle);
+      return res.json(riddle); // có thể thêm return cho rõ ràng
     } catch (parseErr) {
       console.error('Lỗi phân tích JSON:', parseErr);
-      res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
+      return res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
     }
   });
 });
