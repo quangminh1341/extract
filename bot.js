@@ -4,6 +4,7 @@ const app = express();
 const axios = require('axios');
 const fetch = require('node-fetch');
 const path = require('path');
+const riddlesFile = path.join(__dirname, 'riddles.json');
 const port = 3000;
 
 app.use(cors());
@@ -13,11 +14,8 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-// Đường dẫn file riddles.json (đặt cùng thư mục với file này)
-const riddlesFile = path.join(__dirname, 'riddles.json');
-
 // API lấy ngẫu nhiên 1 câu đố
-app.get('/random-riddle', (req, res) => {
+app.get('/riddle', (req, res) => {
   fs.readFile(riddlesFile, 'utf8', (err, data) => {
     if (err) {
       console.error('Lỗi đọc file riddles.json:', err);
@@ -26,17 +24,17 @@ app.get('/random-riddle', (req, res) => {
     try {
       const riddles = JSON.parse(data);
       if (!Array.isArray(riddles) || riddles.length === 0) {
-        return res.status(404).json({ error: 'Không có câu đố nào trong file' });
+        return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ hoặc trống' });
       }
-      // Chọn ngẫu nhiên 1 câu đố
       const randomIndex = Math.floor(Math.random() * riddles.length);
-      const randomRiddle = riddles[randomIndex];
-      res.json(randomRiddle);
+      const riddle = riddles[randomIndex];
+      res.json(riddle);
     } catch (parseErr) {
       console.error('Lỗi phân tích JSON:', parseErr);
-      return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ' });
+      res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
     }
   });
+});
 
   
 });
