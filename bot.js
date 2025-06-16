@@ -12,12 +12,6 @@ app.use(express.json());
 app.get('/ping', (req, res) => {
   res.send('pong');
 });
-
-setInterval(() => {
-    fetch(`https://extract-i06m.onrender.com/ping`)
-      .then(res => console.log('Self-ping status:', res.status))
-      .catch(err => console.error('Ping error:', err));
-  }, 5 * 60 * 1000);
   
 // API 1: Tách id và money
 app.post("/extract", (req, res) => {
