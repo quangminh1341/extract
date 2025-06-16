@@ -36,9 +36,6 @@ app.get('/riddle', (req, res) => {
   });
 });
 
-  
-});
-  
 // API 1: Tách id và money
 app.post("/extract", (req, res) => {
   const text = req.body.text || "";
