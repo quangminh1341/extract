@@ -11,6 +11,34 @@ app.use(express.json());
 app.get('/ping', (req, res) => {
   res.send('pong');
 });
+
+// Đường dẫn file riddles.json (đặt cùng thư mục với file này)
+const riddlesFile = path.join(__dirname, 'riddles.json');
+
+// API lấy ngẫu nhiên 1 câu đố
+app.get('/random-riddle', (req, res) => {
+  fs.readFile(riddlesFile, 'utf8', (err, data) => {
+    if (err) {
+      console.error('Lỗi đọc file riddles.json:', err);
+      return res.status(500).json({ error: 'Không thể đọc dữ liệu câu đố' });
+    }
+    try {
+      const riddles = JSON.parse(data);
+      if (!Array.isArray(riddles) || riddles.length === 0) {
+        return res.status(404).json({ error: 'Không có câu đố nào trong file' });
+      }
+      // Chọn ngẫu nhiên 1 câu đố
+      const randomIndex = Math.floor(Math.random() * riddles.length);
+      const randomRiddle = riddles[randomIndex];
+      res.json(randomRiddle);
+    } catch (parseErr) {
+      console.error('Lỗi phân tích JSON:', parseErr);
+      return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ' });
+    }
+  });
+
+  
+});
   
 // API 1: Tách id và money
 app.post("/extract", (req, res) => {
