@@ -10,7 +10,7 @@ app.use(express.json());
 
 // Tránh ngủ đông API
 app.get('/ping', (req, res) => {
-  res.send('pong');
+  res.json({ id, money });
 });
   
 // API 1: Tách id và money
