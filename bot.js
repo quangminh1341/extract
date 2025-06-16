@@ -8,9 +8,8 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
-// Tránh ngủ đông API
 app.get('/ping', (req, res) => {
-  res.json({ id, money });
+  res.send('pong');
 });
   
 // API 1: Tách id và money
@@ -37,7 +36,7 @@ app.post("/extract-word", (req, res) => {
   res.json({ text: secondWord });
 });
 
-// ✅ API 3: Tìm cụm bắt đầu bằng từ khóa từ text cố định (không gửi từ client)
+// API 3: Tìm cụm bắt đầu bằng từ khóa từ text cố định (không gửi từ client)
 app.post("/match-words", (req, res) => {
   const word = req.body.word || "";
   let inputText = req.body.text;
@@ -62,8 +61,9 @@ app.post("/match-words", (req, res) => {
   // ✅ Kết quả trả về
   const resultText = matches.length > 0
     ? matches.join(",")
-    : `Không có từ nào bắt đầu bằng '${word}'`;
+    : `Không còn từ nào bắt đầu bằng '${word}'`;
 
+// API 4: Tarot
   res.json({
     start: word,
     text: resultText
