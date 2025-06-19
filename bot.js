@@ -65,7 +65,21 @@ app.post("/extract", (req, res) => {
   const moneyMatch = text.match(/\s(\d+)/);
   const money = moneyMatch ? moneyMatch[1] : "";
 
-  res.json({ id, money });
+  let moneyRel = "";
+  if (money) {
+    try {
+      const parsedMoney = parseInt(money, 10);
+      if (!isNaN(parsedMoney)) {
+        moneyRel = parsedMoney.toLocaleString('en-US');
+      }
+    } catch (error) {
+      console.error("Lỗi khi định dạng tiền tệ:", error);
+      moneyRel = "";
+    }
+  }
+
+  // Trả về cả id, money (gốc), và moneyRel (đã định dạng)
+  res.json({ id, money, moneyRel });
 });
 
 // API 2: Tách từ thứ 2 từ văn bản có 2 từ
