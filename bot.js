@@ -15,6 +15,24 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
+app.get('/money', (req, res) => {
+  const numberStr = req.query.number;
+  if (!numberStr) {
+    return res.status(400).json({ error: "Tham số 'number' bị thiếu. Vui lòng cung cấp một số." });
+  }
+
+  try {
+    const number = parseInt(numberStr, 10);
+    if (isNaN(number)) {
+      return res.status(400).json({ error: "Định dạng 'number' không hợp lệ. Vui lòng cung cấp một số nguyên." });
+    }
+    const formattedNumber = number.toLocaleString('en-US');
+    res.json({ formatted_number: formattedNumber });
+  } catch (error) {
+    return res.status(500).json({ error: "Đã xảy ra lỗi không mong muốn." });
+  }
+});
+
 // API lấy ngẫu nhiên 1 câu đố
 app.get('/riddle', (req, res) => {
   fs.readFile(riddlesFile, 'utf8', (err, data) => {
