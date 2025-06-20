@@ -199,32 +199,23 @@ const vietnameseStopwords = new Set([
 ]);
 
 function preprocessText(text) {
-    // Chuyển sang chữ thường
     text = text.toLowerCase();
-    // Loại bỏ ký tự không phải chữ cái, số, khoảng trắng hoặc dấu câu cơ bản
-    // Giữ lại các dấu tiếng Việt
     text = text.replace(/[^a-z0-9àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ\s.,?!]/g, '');
-    // Chuẩn hóa khoảng trắng
     text = text.replace(/\s+/g, ' ').trim();
     return text;
 }
 
-// Hàm tách từ và lọc stop words
 function tokenizeAndFilterWords(sentence) {
     return WordTokenizer.tokenize(sentence).filter(word => !vietnameseStopwords.has(word));
 }
 
-// Hàm tính TF-IDF (Term Frequency-Inverse Document Frequency)
-// Trong ngữ cảnh tóm tắt một văn bản, "document" ở đây là một câu.
-// "corpus" là tập hợp tất cả các câu trong văn bản.
 function calculateTfIdf(sentences) {
     const tfidf = new natural.TfIdf();
     sentences.forEach((sentence, index) => {
-        tfidf.addDocument(tokenizeAndFilterWords(sentence).join(' ')); // tfidf cần input là chuỗi
+        tfidf.addDocument(tokenizeAndFilterWords(sentence).join(' '));
     });
 
-    // Lấy trọng số TF-IDF cho mỗi từ trong mỗi câu
-    const wordScores = {}; // Lưu trữ tổng điểm TF-IDF cho mỗi từ
+    const wordScores = {};
     for (let i = 0; i < sentences.length; i++) {
         tfidf.listTerms(i).forEach(item => {
             wordScores[item.term] = (wordScores[item.term] || 0) + item.tfidf;
@@ -233,7 +224,6 @@ function calculateTfIdf(sentences) {
     return wordScores;
 }
 
-// Hàm tính điểm cho mỗi câu dựa trên TF-IDF và vị trí
 function calculateSentenceScores(sentences, wordTfIdfScores) {
     const sentenceScores = {};
     const totalSentences = sentences.length;
@@ -242,19 +232,14 @@ function calculateSentenceScores(sentences, wordTfIdfScores) {
         let score = 0;
         const words = tokenizeAndFilterWords(sentence);
         for (const word of words) {
-            score += (wordTfIdfScores[word] || 0); // Cộng điểm TF-IDF của từ
+            score += (wordTfIdfScores[word] || 0); 
         }
-
-        // Thêm trọng số vị trí: Câu đầu tiên và cuối cùng quan trọng hơn
-        // Bạn có thể điều chỉnh hệ số này
         let positionWeight = 1;
-        if (index === 0) { // Câu đầu tiên
+        if (index === 0) { 
             positionWeight = 1.2;
-        } else if (index === totalSentences - 1 && totalSentences > 1) { // Câu cuối cùng (nếu có nhiều hơn 1 câu)
+        } else if (index === totalSentences - 1 && totalSentences > 1) {
             positionWeight = 1.1;
         } else {
-            // Giảm dần trọng số cho các câu ở giữa (tùy chọn)
-            // positionWeight = 1 - (index / totalSentences) * 0.2; // Ví dụ: Giảm 20% từ đầu đến cuối
         }
         
         sentenceScores[sentence] = score * positionWeight;
@@ -272,27 +257,19 @@ function calculateSentenceScores(sentences, wordTfIdfScores) {
 function summarizeText(text, reductionPercentage = 40) {
     const cleanedText = preprocessText(text);
     const sentences = SentenceTokenizer.tokenize(cleanedText);
-
-    // Tính toán số câu cần giữ lại (ví dụ: rút gọn 40% => giữ lại 60%)
     const targetSentencesCount = Math.ceil(sentences.length * ((100 - reductionPercentage) / 100));
 
     if (sentences.length <= targetSentencesCount || sentences.length === 0) {
-        // Nếu số câu ít hơn hoặc bằng số lượng mục tiêu, hoặc không có câu nào, trả về văn bản gốc
         return text;
     }
 
     const wordTfIdfScores = calculateTfIdf(sentences);
     const sentenceScores = calculateSentenceScores(sentences, wordTfIdfScores);
-
-    // Sắp xếp các câu theo điểm từ cao xuống thấp
     const sortedSentencesByScore = Object.keys(sentenceScores).sort((a, b) => {
         return sentenceScores[b] - sentenceScores[a];
     });
 
-    // Chọn ra các câu có điểm cao nhất
     const topSentences = sortedSentencesByScore.slice(0, targetSentencesCount);
-
-    // Sắp xếp lại các câu đã chọn theo thứ tự xuất hiện trong văn bản gốc
     const finalSummarySentences = [];
     for (const originalSentence of sentences) {
         if (topSentences.includes(originalSentence)) {
