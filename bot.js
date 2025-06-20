@@ -3,6 +3,9 @@ const cors = require("cors");
 const app = express();
 const axios = require('axios');
 const fetch = require('node-fetch');
+const path = require('path');
+const riddlesFile = path.join(__dirname, 'riddles.json');
+const fs = require('fs');
 const port = 3000;
 
 app.use(cors());
@@ -12,11 +15,69 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-// Đường dẫn file riddles.json (đặt cùng thư mục với file này)
-const riddlesFile = path.join(__dirname, 'riddles.json');
+const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST; 
+const TRANSLATE_ENDPOINT = 'https://' + RAPIDAPI_HOST + '/translate';
+
+app.post('/translate', async (req, res) => {
+    const { text } = req.body;
+
+    if (!text) {
+        return res.status(400).json({ error: 'Văn bản là bắt buộc trong body yêu cầu.' });
+    }
+
+    try {
+        const response = await axios.post(TRANSLATE_ENDPOINT,
+            {
+                q: text, 
+                target: 'en',  
+                source: 'vi' 
+            },
+            {
+                headers: {
+                    'content-type': 'application/x-www-form-urlencoded',
+                    'x-rapidapi-key': RAPIDAPI_KEY,
+                    'x-rapidapi-host': RAPIDAPI_HOST
+                }
+            }
+        );
+        const translatedText = response.data.data.translations[0].translatedText;
+
+        res.json({ translatedText: translatedText });
+
+    } catch (error) {
+        console.error('Lỗi Dịch thuật RapidAPI:', error.message);
+        if (error.response) {
+            console.error('Dữ liệu phản hồi lỗi:', error.response.data);
+            console.error('Trạng thái phản hồi lỗi:', error.response.status);
+            console.error('Tiêu đề phản hồi lỗi:', error.response.headers);
+        }
+        res.status(500).json({
+            error: 'Không thể dịch văn bản bằng RapidAPI.',
+            details: error.response ? error.response.data : error.message
+        });
+    }
+});
+
+app.get('/money', (req, res) => {
+  const numberStr = req.query.number;
+  if (!numberStr) {
+    return res.status(400).json({ error: "Tham số 'number' bị thiếu. Vui lòng cung cấp một số." });
+  }
+
+  try {
+    const number = parseInt(numberStr, 10);
+    if (isNaN(number)) {
+      return res.status(400).json({ error: "Định dạng 'number' không hợp lệ. Vui lòng cung cấp một số nguyên." });
+    }
+    const formattedNumber = number.toLocaleString('en-US');
+    res.json({ formatted_number: formattedNumber });
+  } catch (error) {
+    return res.status(500).json({ error: "Đã xảy ra lỗi không mong muốn." });
+  }
+});
 
 // API lấy ngẫu nhiên 1 câu đố
-app.get('/random-riddle', (req, res) => {
+app.get('/riddle', (req, res) => {
   fs.readFile(riddlesFile, 'utf8', (err, data) => {
     if (err) {
       console.error('Lỗi đọc file riddles.json:', err);
@@ -25,21 +86,18 @@ app.get('/random-riddle', (req, res) => {
     try {
       const riddles = JSON.parse(data);
       if (!Array.isArray(riddles) || riddles.length === 0) {
-        return res.status(404).json({ error: 'Không có câu đố nào trong file' });
+        return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ hoặc trống' });
       }
-      // Chọn ngẫu nhiên 1 câu đố
       const randomIndex = Math.floor(Math.random() * riddles.length);
-      const randomRiddle = riddles[randomIndex];
-      res.json(randomRiddle);
+      const riddle = riddles[randomIndex];
+      return res.json(riddle); // có thể thêm return cho rõ ràng
     } catch (parseErr) {
       console.error('Lỗi phân tích JSON:', parseErr);
-      return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ' });
+      return res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
     }
   });
-
-  
 });
-  
+
 // API 1: Tách id và money
 app.post("/extract", (req, res) => {
   const text = req.body.text || "";
@@ -50,7 +108,21 @@ app.post("/extract", (req, res) => {
   const moneyMatch = text.match(/\s(\d+)/);
   const money = moneyMatch ? moneyMatch[1] : "";
 
-  res.json({ id, money });
+  let moneyRel = "";
+  if (money) {
+    try {
+      const parsedMoney = parseInt(money, 10);
+      if (!isNaN(parsedMoney)) {
+        moneyRel = parsedMoney.toLocaleString('en-US');
+      }
+    } catch (error) {
+      console.error("Lỗi khi định dạng tiền tệ:", error);
+      moneyRel = "";
+    }
+  }
+
+  // Trả về cả id, money (gốc), và moneyRel (đã định dạng)
+  res.json({ id, money, moneyRel });
 });
 
 // API 2: Tách từ thứ 2 từ văn bản có 2 từ
