@@ -9,6 +9,7 @@ const fs = require('fs');
 const port = 3000;
 require('dotenv').config();
 const natural = require('natural');
+const bodyParser = require('body-parser');
 const SentenceTokenizer = new natural.SentenceTokenizer();
 const WordTokenizer = new natural.WordTokenizer();
 
