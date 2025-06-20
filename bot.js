@@ -15,6 +15,7 @@ app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
+<<<<<<< HEAD
 const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST; 
 const TRANSLATE_ENDPOINT = 'https://' + RAPIDAPI_HOST + '/translate';
 
@@ -58,6 +59,8 @@ app.post('/translate', async (req, res) => {
     }
 });
 
+=======
+>>>>>>> f06e2247c422b10ab6490493251d25c637073a96
 app.get('/money', (req, res) => {
   const numberStr = req.query.number;
   if (!numberStr) {
