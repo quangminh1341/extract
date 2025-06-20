@@ -1,26 +1,134 @@
-const express = require("express");
-const cors = require("cors");
-const app = express();
-const axios = require('axios');
-const fetch = require('node-fetch');
+// bot.js (Chỉ API - Tất cả các tính năng API khác được giữ lại)
+
+// --- 1. Imports các thư viện cần thiết (Luôn ở đầu file) ---
+const express = require('express');
+const cors = require('cors');
+const bodyParser = require('body-parser'); // Cần thiết cho các loại content-type phức tạp, express.json() thường đủ cho JSON
+const axios = require('axios'); // Giữ lại nếu bạn sử dụng axios trong các API khác
+const fetch = require('node-fetch'); // Giữ lại nếu bạn sử dụng node-fetch trong các API khác
 const path = require('path');
-const riddlesFile = path.join(__dirname, 'riddles.json');
 const fs = require('fs');
-const port = 3000;
-require('dotenv').config();
+require('dotenv').config(); // Tải biến môi trường từ file .env
+
+// Natural (NLP) imports cho tóm tắt văn bản
 const natural = require('natural');
-const bodyParser = require('body-parser');
 const SentenceTokenizer = new natural.SentenceTokenizer();
 const WordTokenizer = new natural.WordTokenizer();
 
-app.use(cors());
-app.use(express.json());
-app.use(bodyParser.json());
+// --- 2. Khai báo các biến và hàm hỗ trợ (bao gồm logic tóm tắt và các đường dẫn file) ---
 
+// Đường dẫn đến file riddles.json
+const riddlesFile = path.join(__dirname, 'riddles.json');
+
+// Placeholder cho dữ liệu Tarot (giả định bạn có file tarot.json tương tự riddles.json)
+const tarotFile = path.join(__dirname, 'tarot.json');
+let tarotData = []; // Khởi tạo rỗng, sẽ được load sau
+
+// Hàm tải dữ liệu Tarot (gọi khi ứng dụng khởi động)
+function loadTarotData() {
+    fs.readFile(tarotFile, 'utf8', (err, data) => {
+        if (err) {
+            console.error('Lỗi đọc file tarot.json:', err);
+            // Có thể tạo file rỗng nếu không tồn tại để tránh lỗi tiếp theo
+            if (err.code === 'ENOENT') {
+                console.warn('File tarot.json không tìm thấy. Tạo mảng trống cho dữ liệu tarot.');
+                tarotData = [];
+            }
+            return;
+        }
+        try {
+            tarotData = JSON.parse(data);
+            console.log('Đã tải dữ liệu Tarot thành công.');
+        } catch (parseErr) {
+            console.error('Lỗi phân tích JSON tarot.json:', parseErr);
+        }
+    });
+}
+// Gọi hàm loadTarotData khi khởi động ứng dụng
+loadTarotData();
+
+// Danh sách Stop Words cho tóm tắt văn bản (tiếng Việt)
+const stopwords = new Set([
+    'là', 'và', 'của', 'trong', 'trên', 'với', 'một', 'những', 'các', 'đã', 'sẽ', 'không', 'có', 'được', 'từ', 'cho', 'về', 'khi', 'mà', 'này', 'ấy', 'nếu', 'như', 'tôi', 'anh', 'chị', 'em', 'chúng', 'họ', 'rằng', 'thì', 'ở', 'để', 'cũng', 'vậy', 'đi', 'lại', 'rồi', 'nhưng', 'còn', 'hay', 'ra', 'vào', 'bởi', 'do', 'đó', 'nữa', 'ai', 'gì', 'đâu', 'nào', 'chứ', 'đây', 'kia', 'sao', 'mà', 'tới', 'đến', 'theo', 'phải', 'trước', 'sau', 'trên', 'dưới', 'trong', 'ngoài', 'giữa', 'bên', 'cạnh', 'trên', 'đầu', 'cuối', 'giữa'
+]);
+
+// Hàm tiền xử lý văn bản cho tóm tắt
+function preprocessText(text) {
+    text = text.toLowerCase();
+    text = text.replace(/[^a-z0-9àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ\s.,?!]/g, '');
+    return text;
+}
+
+// Hàm tách từ và lọc stop words
+function tokenizeAndFilterWords(sentence) {
+    return WordTokenizer.tokenize(sentence).filter(word => !stopwords.has(word));
+}
+
+// Hàm tính tần suất từ
+function calculateWordFrequency(sentences) {
+    const wordFreq = {};
+    for (const sentence of sentences) {
+        const words = tokenizeAndFilterWords(sentence);
+        for (const word of words) {
+            wordFreq[word] = (wordFreq[word] || 0) + 1;
+        }
+    }
+    return wordFreq;
+}
+
+// Hàm tính điểm cho mỗi câu
+function calculateSentenceScores(sentences, wordFreq) {
+    const sentenceScores = {};
+    for (const sentence of sentences) {
+        let score = 0;
+        const words = tokenizeAndFilterWords(sentence);
+        for (const word of words) {
+            score += (wordFreq[word] || 0);
+        }
+        sentenceScores[sentence] = score;
+    }
+    return sentenceScores;
+}
+
+// Hàm tóm tắt văn bản chính
+function summarizeText(text, sentencesCount = 3) {
+    const cleanedText = preprocessText(text);
+    const sentences = SentenceTokenizer.tokenize(cleanedText);
+
+    if (sentences.length <= sentencesCount) {
+        return text;
+    }
+
+    const wordFrequency = calculateWordFrequency(sentences);
+    const sentenceScores = calculateSentenceScores(sentences, wordFrequency);
+
+    const sortedSentences = Object.keys(sentenceScores).sort((a, b) => {
+        return sentenceScores[b] - sentenceScores[a];
+    });
+
+    const topSentences = sortedSentences.slice(0, sentencesCount);
+
+    const finalSummarySentences = [];
+    for (const originalSentence of sentences) {
+        if (topSentences.includes(originalSentence)) {
+            finalSummarySentences.push(originalSentence);
+        }
+    }
+    return finalSummarySentences.join(' ');
+}
+
+const app = express();
+const API_PORT = process.env.API_PORT || 3000; // Sử dụng API_PORT từ .env hoặc mặc định 3000
+
+app.use(cors()); 
+app.use(express.json());
+
+// API Ping
 app.get('/ping', (req, res) => {
-  res.send('pong');
+    res.send('pong');
 });
 
+// API Tóm tắt văn bản (Phần này là trọng tâm)
 app.post('/summarize', async (req, res) => {
     const { text, sentences_count } = req.body;
 
@@ -40,92 +148,95 @@ app.post('/summarize', async (req, res) => {
         res.status(500).json({ error: 'Đã xảy ra lỗi trong quá trình tóm tắt.' });
     }
 });
-client.on('messageCreate', async message => {
-    // ...
-    if (message.content.startsWith('!summarize')) {
-        const originalText = message.content.slice('!summarize'.length).trim();
-        // ...
-        const summarizedText = summarizeText(originalText, 3); // Vẫn gọi hàm summarizeText như cũ
-        // ...
-    }
-});
 
+// API Định dạng tiền tệ
 app.get('/money', (req, res) => {
-  const numberStr = req.query.number;
-  if (!numberStr) {
-    return res.status(400).json({ error: "Tham số 'number' bị thiếu. Vui lòng cung cấp một số." });
-  }
-
-  try {
-    const number = parseInt(numberStr, 10);
-    if (isNaN(number)) {
-      return res.status(400).json({ error: "Định dạng 'number' không hợp lệ. Vui lòng cung cấp một số nguyên." });
+    const numberStr = req.query.number;
+    if (!numberStr) {
+        return res.status(400).json({ error: "Tham số 'number' bị thiếu. Vui lòng cung cấp một số." });
     }
-    const formattedNumber = number.toLocaleString('en-US');
-    res.json({ formatted_number: formattedNumber });
-  } catch (error) {
-    return res.status(500).json({ error: "Đã xảy ra lỗi không mong muốn." });
-  }
+
+    try {
+        const number = parseInt(numberStr, 10);
+        if (isNaN(number)) {
+            return res.status(400).json({ error: "Định dạng 'number' không hợp lệ. Vui lòng cung cấp một số nguyên." });
+        }
+        const formattedNumber = number.toLocaleString('en-US'); // Định dạng tiền tệ theo chuẩn US
+        res.json({ formatted_number: formattedNumber });
+    } catch (error) {
+        return res.status(500).json({ error: "Đã xảy ra lỗi không mong muốn." });
+    }
 });
 
 // API lấy ngẫu nhiên 1 câu đố
 app.get('/riddle', (req, res) => {
-  fs.readFile(riddlesFile, 'utf8', (err, data) => {
-    if (err) {
-      console.error('Lỗi đọc file riddles.json:', err);
-      return res.status(500).json({ error: 'Không thể đọc dữ liệu câu đố' });
-    }
-    try {
-      const riddles = JSON.parse(data);
-      if (!Array.isArray(riddles) || riddles.length === 0) {
-        return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ hoặc trống' });
-      }
-      const randomIndex = Math.floor(Math.random() * riddles.length);
-      const riddle = riddles[randomIndex];
-      return res.json(riddle); // có thể thêm return cho rõ ràng
-    } catch (parseErr) {
-      console.error('Lỗi phân tích JSON:', parseErr);
-      return res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
-    }
-  });
+    fs.readFile(riddlesFile, 'utf8', (err, data) => {
+        if (err) {
+            console.error('Lỗi đọc file riddles.json:', err);
+            // Có thể tạo file rỗng nếu không tồn tại
+            if (err.code === 'ENOENT') {
+                console.warn('File riddles.json không tìm thấy. Trả về lỗi.');
+                return res.status(500).json({ error: 'File dữ liệu câu đố không tìm thấy' });
+            }
+            return res.status(500).json({ error: 'Không thể đọc dữ liệu câu đố' });
+        }
+        try {
+            const riddles = JSON.parse(data);
+            if (!Array.isArray(riddles) || riddles.length === 0) {
+                return res.status(500).json({ error: 'Dữ liệu câu đố không hợp lệ hoặc trống' });
+            }
+            const randomIndex = Math.floor(Math.random() * riddles.length);
+            const riddle = riddles[randomIndex];
+            return res.json(riddle);
+        } catch (parseErr) {
+            console.error('Lỗi phân tích JSON:', parseErr);
+            return res.status(500).json({ error: 'Dữ liệu JSON không hợp lệ' });
+        }
+    });
 });
 
 // API 1: Tách id và money
 app.post("/extract", (req, res) => {
-  const text = req.body.text || "";
+    const text = req.body.text || "";
 
-  const idMatch = text.match(/<@(\d+)>/);
-  const id = idMatch ? idMatch[1] : "";
+    const idMatch = text.match(/<@(\d+)>/);
+    const id = idMatch ? idMatch[1] : "";
 
-  const moneyMatch = text.match(/\s(\d+)/);
-  const money = moneyMatch ? moneyMatch[1] : "";
+    const moneyMatch = text.match(/\s(\d+)/);
+    const money = moneyMatch ? moneyMatch[1] : "";
 
-  let moneyRel = "";
-  if (money) {
-    try {
-      const parsedMoney = parseInt(money, 10);
-      if (!isNaN(parsedMoney)) {
-        moneyRel = parsedMoney.toLocaleString('en-US');
-      }
-    } catch (error) {
-      console.error("Lỗi khi định dạng tiền tệ:", error);
-      moneyRel = "";
+    let moneyRel = "";
+    if (money) {
+        try {
+            const parsedMoney = parseInt(money, 10);
+            if (!isNaN(parsedMoney)) {
+                moneyRel = parsedMoney.toLocaleString('en-US');
+            }
+        } catch (error) {
+            console.error("Lỗi khi định dạng tiền tệ:", error);
+            moneyRel = "";
+        }
     }
-  }
-
-  // Trả về cả id, money (gốc), và moneyRel (đã định dạng)
-  res.json({ id, money, moneyRel });
+    res.json({ id, money, moneyRel });
 });
 
 // API 2: Tách từ thứ 2 từ văn bản có 2 từ
 app.post("/extract-word", (req, res) => {
-  const input = req.body.text || "";
+    const input = req.body.text || "";
 
-  const words = input.trim().split(/\s+/); // tách theo khoảng trắng
+    const words = input.trim().split(/\s+/);
+    const secondWord = words.length >= 2 ? words[1] : "";
 
-  const secondWord = words.length >= 2 ? words[1] : "";
+    res.json({ text: secondWord });
+});
 
-  res.json({ text: secondWord });
+// API Tarot
+app.get('/api/tarot', (req, res) => {
+    if (tarotData.length === 0) {
+        return res.status(500).json({ error: 'Dữ liệu Tarot chưa được tải hoặc trống.' });
+    }
+    const randomCard = tarotData[Math.floor(Math.random() * tarotData.length)];
+    res.json(randomCard);
 });
 
 // API 3: Tìm cụm bắt đầu bằng từ khóa từ text cố định (không gửi từ client)
@@ -162,721 +273,9 @@ app.post("/match-words", (req, res) => {
   });
 });
 
-const tarotData = [
-  {
-    name: "The Fool (0)",
-    suit: "Ẩn Chính",
-    keywords: "Khởi đầu, Ngây thơ, Phiêu lưu, Tự do, Sáng tạo, Tiềm năng",
-    description: "Lá The Fool miêu tả một chàng thanh niên đứng trên mép vách đá, nhìn lên bầu trời với vẻ hân hoan và đầy hy vọng. Anh ta mang balo nhỏ, thể hiện sự nhẹ nhàng và không vướng bận quá khứ. Bên cạnh là chú chó nhỏ theo sát, biểu tượng cho sự trung thành và sự bảo vệ. The Fool đại diện cho sự khởi đầu của một hành trình mới, sự ngây thơ, tự do và khám phá không giới hạn.",
-    meaning: "The Fool khuyến khích bạn bước vào hành trình mới với tâm hồn cởi mở và tinh thần phiêu lưu. Đây là lúc bạn nên mạnh dạn bắt đầu những điều chưa từng thử, tin tưởng vào trực giác và tiềm năng bản thân. Mặc dù có thể gặp rủi ro, sự mạo hiểm mang đến cơ hội phát triển và tự do cá nhân.\n▿\nTuy nhiên, hãy cẩn thận đừng để sự ngây thơ hoặc thiếu suy nghĩ dẫn bạn vào tình huống nguy hiểm. The Fool cũng nhắc bạn cân bằng giữa sự tự do và trách nhiệm, đừng quá liều lĩnh mà bỏ qua những điều cần suy xét kỹ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/9/90/RWS_Tarot_00_Fool.jpg"
-  },
-  {
-    name: "The Magician (I)",
-    suit: "Ẩn Chính",
-    keywords: "Quyền lực, Tập trung, Sáng tạo, Hành động",
-    description: "Lá The Magician mô tả một pháp sư đứng trước bàn thờ với bốn công cụ của bộ bài Tarot (cúp, gậy, kiếm, đồng tiền), biểu tượng cho sự kết nối giữa các yếu tố đất, nước, lửa và không khí. Anh ta giơ một tay lên trời và một tay chỉ xuống đất, thể hiện sự giao thoa giữa trời và đất, ý nghĩa về quyền năng và sáng tạo.",
-    meaning: "The Magician báo hiệu bạn đang có đầy đủ công cụ và kỹ năng để biến ước mơ thành hiện thực. Đây là thời điểm để tập trung, hành động quyết đoán và khai thác tiềm năng bên trong bản thân.\n▿\nNgược lại, The Magician cũng cảnh báo về sự lừa dối hoặc thiếu trung thực. Hãy sử dụng quyền lực và khả năng một cách đúng đắn để tránh hậu quả không mong muốn.\n▿\nVề tinh thần, đây là lúc để bạn tin tưởng vào bản thân và khai thác tối đa sức mạnh nội tại.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/de/RWS_Tarot_01_Magician.jpg"
-  },
-  {
-    name: "The High Priestess (II)",
-    suit: "Ẩn Chính",
-    keywords: "Trí tuệ, Trực giác, Bí ẩn, Sự im lặng",
-    description: "Lá The High Priestess mô tả một người phụ nữ ngồi giữa hai cột trụ, tay cầm cuốn sách thần bí, tượng trưng cho tri thức ẩn giấu và sự hiểu biết sâu sắc. Cô ấy là biểu tượng của trực giác, sự im lặng và sự thấu hiểu những điều chưa biết.",
-    meaning: "The High Priestess khuyến khích bạn lắng nghe trực giác và khám phá chiều sâu tâm hồn. Đây là thời điểm để nhìn vào bên trong và tìm kiếm câu trả lời từ chính mình.\n▿\nCẩn trọng với những bí mật hoặc điều chưa rõ ràng xung quanh bạn. Đôi khi sự im lặng là câu trả lời tốt nhất.\n▿\nVề tinh thần, lá bài nhắc bạn trân trọng và phát triển sức mạnh nội tâm.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/8/88/RWS_Tarot_02_High_Priestess.jpg"
-  },
-  {
-    name: "The Empress (III)",
-    suit: "Ẩn Chính",
-    keywords: "Tình mẫu tử, Sự phong phú, Sáng tạo, Thiên nhiên, Sinh sản, Nuôi dưỡng",
-    description: "The Empress là biểu tượng của sự phong phú, sáng tạo và tình mẫu tử. Bà ngồi trên ngai vàng giữa một cánh đồng lúa mạch, tượng trưng cho sự sinh sôi nảy nở. Vương miện có mười hai ngôi sao đại diện cho chu kỳ thời gian và sự kết nối với thiên nhiên. Chiếc áo choàng hoa thể hiện sự dồi dào và tình yêu thiên nhiên.",
-    meaning: "The Empress báo hiệu một thời kỳ của sự sáng tạo, phát triển và kết nối cảm xúc. Đây là lúc bạn nên nuôi dưỡng những ý tưởng, dự án, hoặc mối quan hệ với tình yêu và sự dịu dàng. Lá bài cũng có thể chỉ ra sự sinh sản, mang thai, hoặc vai trò làm cha mẹ trong cuộc sống.\n▿\nNếu bạn đang theo đuổi một kế hoạch sáng tạo, The Empress khuyến khích bạn kết nối với năng lượng nữ tính – sự tiếp nhận, nuôi dưỡng và trực giác. Hãy quan tâm đến cơ thể và môi trường xung quanh bạn. Hòa mình vào thiên nhiên sẽ mang lại sự hồi phục và cảm hứng mới.\n▿\nNgược lại, The Empress cảnh báo về việc quá nuông chiều hoặc trở nên phụ thuộc vào người khác. Cần duy trì sự cân bằng giữa chăm sóc người khác và chăm sóc chính mình.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/0/0d/RWS_Tarot_03_Empress.jpg"
-  },
-  {
-    name: "The Emperor (IV)",
-    suit: "Ẩn Chính",
-    keywords: "Quyền lực, Ổn định, Lãnh đạo, Kiểm soát, Cấu trúc, Kỷ luật",
-    description: "The Emperor là biểu tượng của quyền lực, luật lệ và sự ổn định. Ông ngồi trên ngai vàng bằng đá, khắc hình đầu cừu đực – đại diện cho cung Bạch Dương, ý chí và hành động. Tay phải cầm quyền trượng Ankh – biểu tượng của sự sống, tay trái cầm quả cầu – biểu tượng thế giới mà ông kiểm soát.",
-    meaning: "The Emperor thể hiện sức mạnh của việc thiết lập trật tự, kỷ luật và quyền lực. Đây là thời điểm bạn cần áp dụng lý trí, logic và xây dựng nền tảng vững chắc để đạt được mục tiêu. Nếu bạn đang tìm kiếm sự ổn định, lá bài cho thấy bạn cần trở thành người lãnh đạo của chính mình.\n▿\nThe Emperor cũng có thể đại diện cho người cha, người cố vấn hoặc nhân vật có thẩm quyền trong cuộc sống của bạn. Đây là người có ảnh hưởng lớn và có thể giúp bạn đạt được sự an toàn và định hướng.\n▿\nỞ mặt tiêu cực, lá bài nhắc nhở không nên quá cứng nhắc, độc đoán hoặc bị ám ảnh bởi quyền lực. Hãy dùng quyền lực một cách công bằng và có trách nhiệm.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/c/c3/RWS_Tarot_04_Emperor.jpg"
-  },
-  {
-    name: "The Hierophant (V)",
-    suit: "Ẩn Chính",
-    keywords: "Truyền thống, Tâm linh, Giáo dục, Đạo đức, Tín ngưỡng, Niềm tin",
-    description: "The Hierophant mô tả một giáo hoàng hoặc nhà tâm linh ngồi giữa hai cột, tay ban phước và tay kia cầm cây quyền trượng ba tầng. Trước mặt là hai tín đồ đang tiếp nhận giáo lý. Lá bài đại diện cho hệ thống tôn giáo, truyền thống và sự dạy dỗ tinh thần.",
-    meaning: "The Hierophant biểu thị sự kết nối với truyền thống, niềm tin và giáo lý tâm linh. Đây là thời điểm bạn nên học hỏi từ những hệ thống đã tồn tại, lắng nghe lời khuyên từ người đi trước hoặc sư phụ tinh thần.\n▿\nTrong công việc hoặc cuộc sống, lá bài khuyên bạn tuân thủ luật lệ, làm theo đúng trình tự. Nó cũng chỉ ra việc học tập, thi cử hoặc tham gia các tổ chức có cấu trúc rõ ràng.\n▿\nNgược lại, The Hierophant có thể là lời cảnh báo về việc quá cứng nhắc trong tư duy, quá phụ thuộc vào truyền thống hoặc bị giới hạn bởi những quy tắc cũ. Hãy cân nhắc giữa học hỏi và phát triển độc lập.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/8/8d/RWS_Tarot_05_Hierophant.jpg"
-  },
-  {
-    name: "The Lovers (VI)",
-    suit: "Ẩn Chính",
-    keywords: "Tình yêu, Sự lựa chọn, Sự hòa hợp, Mối quan hệ, Gắn kết tâm linh",
-    description: "The Lovers mô tả một người nam và một người nữ khỏa thân đứng trước Thiên thần Raphael. Phía sau họ là Cây Tri Thức và Cây Lửa, biểu tượng của sự cám dỗ và đam mê. Thiên thần tượng trưng cho tình yêu thuần khiết và sự bảo vệ từ trên cao.",
-    meaning: "The Lovers thường đại diện cho tình yêu sâu sắc, sự hòa hợp và lựa chọn trong mối quan hệ. Lá bài mang ý nghĩa kết nối tâm linh, sự hòa hợp giữa hai linh hồn, hoặc một lựa chọn đạo đức mà bạn cần đưa ra.\n▿\nĐây là lời nhắc hãy lựa chọn dựa trên niềm tin cá nhân và giá trị đạo đức, thay vì chỉ vì dục vọng. Hãy lắng nghe con tim và lý trí một cách cân bằng.\n▿\nỞ mặt trái, lá bài có thể biểu thị sự chia rẽ, bất đồng trong quan hệ, hoặc khó khăn khi đưa ra quyết định quan trọng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/3a/The_Lovers.jpg"
-  },
-  {
-    name: "The Chariot (VII)",
-    suit: "Ẩn Chính",
-    keywords: "Chiến thắng, Quyết tâm, Kiểm soát, Tham vọng, Ý chí, Động lực",
-    description: "The Chariot mô tả một chiến binh đứng trên cỗ xe được kéo bởi hai nhân sư – một trắng, một đen – tượng trưng cho hai lực lượng đối lập. Chiến binh không cầm dây cương, mà điều khiển bằng ý chí và tinh thần.",
-    meaning: "The Chariot là biểu tượng của chiến thắng thông qua sự quyết tâm, ý chí kiên định và kiểm soát cảm xúc. Đây là thời điểm bạn cần khẳng định vị trí của mình và tiến về phía trước một cách mạnh mẽ.\n▿\nNó cũng khuyến khích bạn vượt qua thử thách bằng cách điều khiển các thế lực đối lập trong cuộc sống – giữa cảm xúc và lý trí, giữa lý tưởng và thực tế.\n▿\nNgược lại, lá bài có thể chỉ ra thiếu định hướng, mất kiểm soát hoặc bị kéo đi bởi hai hướng đối lập.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/3a/RWS_Tarot_07_Chariot.jpg"
-  },
-  {
-    name: "Strength (VIII)",
-    suit: "Ẩn Chính",
-    keywords: "Sức mạnh nội tâm, Kiên nhẫn, Từ bi, Dũng cảm, Kỷ luật cảm xúc",
-    description: "Lá bài mô tả một người phụ nữ nhẹ nhàng mở miệng con sư tử bằng tay không – biểu tượng cho sự điều khiển cảm xúc bằng sự kiên nhẫn và lòng từ bi, không phải vũ lực.",
-    meaning: "Strength đại diện cho sức mạnh đến từ lòng kiên nhẫn, lòng tốt và kỷ luật cảm xúc. Bạn có thể vượt qua trở ngại bằng tình thương thay vì sự ép buộc.\n▿\nĐây là thời điểm bạn phải kiểm soát những cơn bốc đồng, nổi nóng, hoặc nỗi sợ. Sức mạnh thật sự nằm ở nội tâm, trong khả năng làm chủ cảm xúc.\n▿\nLá bài này cũng gợi ý về việc chữa lành, tự tin, và kiên trì tiến về phía trước dù gặp thử thách.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/f5/RWS_Tarot_08_Strength.jpg"
-  },
-  {
-    name: "The Hermit (IX)",
-    suit: "Ẩn Chính",
-    keywords: "Tìm kiếm nội tâm, Cô độc, Hướng nội, Khai sáng, Khám phá tâm linh",
-    description: "The Hermit mô tả một người già cô độc, cầm đèn lồng chiếu sáng con đường phía trước. Đèn lồng chứa ngôi sao sáu cánh – biểu tượng của sự khôn ngoan và sự thật. Ông leo núi một mình, đại diện cho hành trình tâm linh sâu sắc.",
-    meaning: "The Hermit nhắc bạn hãy tạm thời rút lui khỏi thế giới bên ngoài để lắng nghe tiếng nói bên trong. Đây là thời điểm để thiền định, tự soi sáng con đường, và khám phá bản chất thật của bạn.\n▿\nBạn có thể đang cần tìm lời khuyên từ một người thầy tâm linh hoặc chính bạn cần trở thành người hướng dẫn cho người khác bằng kinh nghiệm của mình.\n▿\nỞ khía cạnh khác, lá bài có thể báo hiệu sự cô lập, hoặc đang quá hướng nội mà bỏ lỡ cơ hội kết nối với người khác.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/4/4d/RWS_Tarot_09_Hermit.jpg"
-  },
-  {
-    name: "Wheel of Fortune (X)",
-    suit: "Ẩn Chính",
-    keywords: "Số phận, Vòng xoay cuộc đời, Biến động, May rủi, Luật nhân quả",
-    description: "Lá bài mô tả một bánh xe lớn với các sinh vật thần thoại bao quanh, tượng trưng cho sự thay đổi liên tục và những chu kỳ không thể tránh khỏi của cuộc sống.",
-    meaning: "Wheel of Fortune báo hiệu một bước ngoặt lớn. Bạn đang bước vào giai đoạn chuyển biến mạnh – có thể là may mắn hoặc thử thách, tùy vào cách bạn ứng xử.\n▿\nLá bài nhắc rằng mọi thứ đều thay đổi theo chu kỳ. Khi thời vận đến, hãy nắm lấy cơ hội. Khi rơi vào khó khăn, đừng tuyệt vọng – bánh xe sẽ lại xoay.\n▿\nĐôi khi, bạn cần buông bỏ kiểm soát và học cách tin vào sự dẫn dắt của vũ trụ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/3c/RWS_Tarot_10_Wheel_of_Fortune.jpg"
-  },
-  {
-    name: "Justice (XI)",
-    suit: "Ẩn Chính",
-    keywords: "Công lý, Sự thật, Luật nhân quả, Quyết định, Cân bằng",
-    description: "Justice mô tả một người phụ nữ ngồi trên ngai với thanh kiếm ở tay phải (hành động) và cán cân ở tay trái (sự công bằng). Bà là hiện thân của sự thật và công lý.",
-    meaning: "Justice yêu cầu bạn đối mặt với hậu quả từ hành động của mình và hành xử một cách chính trực. Đây là lúc bạn cần đưa ra những quyết định khách quan, dựa trên sự thật và công bằng.\n▿\nLá bài cũng chỉ ra việc pháp lý, hợp đồng, hoặc tranh chấp đang cần sự phân xử công minh. Hãy minh bạch và công tâm.\n▿\nNgược lại, lá bài cảnh báo về sự bất công, thiên vị, hoặc việc bạn đang không trung thực với chính mình hay người khác.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/d2/RWS_Tarot_11_Justice.jpg"
-  },
-  {
-  name: "The Hanged Man (XII)",
-  suit: "Major Arcana",
-  keywords: "Tạm dừng, Hy sinh, Nhìn nhận lại, Buông bỏ",
-  description: "The Hanged Man mô tả một người đàn ông bị treo ngược bằng một chân trên một cây, thể hiện sự tạm dừng và hy sinh có ý thức để đạt được sự hiểu biết sâu sắc hơn.",
-  meaning: "The Hanged Man khuyến khích bạn hãy tạm dừng và nhìn nhận lại các tình huống theo một góc nhìn mới. Đây là thời điểm bạn cần buông bỏ những cố chấp và chấp nhận hy sinh để tiến bộ.\n▿\nLá bài nhắc nhở rằng sự chậm lại không phải là thất bại mà là cơ hội để tái tạo và lấy lại cân bằng nội tâm.",
-  image_url: "https://upload.wikimedia.org/wikipedia/commons/2/2b/RWS_Tarot_12_Hanged_Man.jpg"
-  },
-  {
-    name: "Death (XIII)",
-    suit: "Ẩn Chính",
-    keywords: "Kết thúc, Chuyển đổi, Biến đổi, Buông bỏ, Khởi đầu mới",
-    description: "Death là lá bài của sự kết thúc và tái sinh. Một hiệp sĩ mặc áo giáp đen cưỡi ngựa trắng, tay cầm cờ đen với hoa hồng trắng – biểu tượng của sự tinh khiết và tái sinh. Xung quanh là những người gục ngã, thể hiện rằng cái chết đến với mọi người. Nhưng phía sau là mặt trời mọc, báo hiệu khởi đầu mới.",
-    meaning: "Lá Death không nhất thiết là cái chết về thể xác. Nó nói về sự kết thúc cần thiết của một giai đoạn cũ để mở ra cơ hội mới. Đó là sự chuyển đổi sâu sắc, dù có thể đi kèm với đau đớn, nhưng cuối cùng sẽ mang lại sự giải phóng.\n▿\nHãy buông bỏ những điều không còn phục vụ bạn để tiếp tục hành trình với một phiên bản tốt hơn của bản thân. Đây là quá trình tái sinh tinh thần mạnh mẽ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/d7/RWS_Tarot_13_Death.jpg"
-  },
-  {
-    name: "Temperance (XIV)",
-    suit: "Ẩn Chính",
-    keywords: "Cân bằng, Điều độ, Hài hòa, Chữa lành, Kết hợp",
-    description: "Temperance mô tả một thiên thần đứng giữa nước và đất, rót nước qua hai bình. Hành động ấy tượng trưng cho sự kết hợp hài hòa giữa các yếu tố đối lập và sự điều độ trong cảm xúc.",
-    meaning: "Temperance khuyên bạn hãy giữ sự cân bằng trong cuộc sống, cả bên trong và bên ngoài. Kiên nhẫn, hòa nhã và biết tiết chế sẽ mang đến sự ổn định và bình yên.\n▿\nĐây là thời điểm lý tưởng để chữa lành, điều phối năng lượng và kết nối với sự hài hòa nội tâm. Mọi thứ đang dần hòa vào nhau – hãy tiếp tục điều chỉnh nhẹ nhàng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/f8/RWS_Tarot_14_Temperance.jpg"
-  },
-  {
-    name: "The Devil (XV)",
-    suit: "Ẩn Chính",
-    keywords: "Cám dỗ, Ràng buộc, Nghiện ngập, Kiểm soát, Bóng tối",
-    description: "The Devil mô tả một sinh vật nửa người nửa dê đang ngự trị, với hai nhân vật bị xích dưới chân, tượng trưng cho sự nô lệ và phụ thuộc.",
-    meaning: "The Devil đại diện cho những ràng buộc tiêu cực – như nghiện ngập, ám ảnh, quan hệ độc hại hay sự kiểm soát. Nó là lời nhắc bạn phải đối mặt với mặt tối trong bản thân.\n▿\nHãy xem bạn đang bị điều gì giữ lại, và nhớ rằng xiềng xích thường chỉ là ảo tưởng. Bạn có thể tự giải phóng nếu thật sự muốn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/5/55/RWS_Tarot_15_Devil.jpg"
-  },
-  {
-    name: "The Tower (XVI)",
-    suit: "Ẩn Chính",
-    keywords: "Sụp đổ, Bất ngờ, Biến cố, Giải phóng, Thức tỉnh",
-    description: "The Tower mô tả một tòa tháp bị sét đánh, cháy bùng lên, và hai người rơi xuống từ đỉnh. Đó là hình ảnh tượng trưng cho sự sụp đổ đột ngột và không thể kiểm soát.",
-    meaning: "The Tower biểu thị sự thay đổi mạnh mẽ và bất ngờ. Những nền tảng cũ kỹ, sai lệch sẽ bị phá hủy để dọn đường cho sự thật và tiến bộ.\n▿\nDù khó khăn, lá bài này mở ra cơ hội tái thiết và khai sáng. Hãy để sự đổ vỡ dẫn bạn đến sự tỉnh thức sâu sắc hơn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/5/53/RWS_Tarot_16_Tower.jpg"
-  },
-  {
-    name: "The Star (XVII)",
-    suit: "Ẩn Chính",
-    keywords: "Hy vọng, Chữa lành, Lạc quan, Cảm hứng, Kết nối vũ trụ",
-    description: "The Star mô tả một người phụ nữ đổ nước từ hai bình, một vào hồ – biểu tượng tiềm thức, một lên đất – biểu tượng của hiện thực. Phía trên là ngôi sao sáng tượng trưng cho hi vọng và hướng dẫn thần thánh.",
-    meaning: "Lá bài này truyền đi thông điệp tích cực: có hy vọng, có chữa lành, và có ánh sáng dẫn đường. Bạn đang bước vào một thời kỳ hồi phục và cảm hứng mới.\n▿\nHãy tin tưởng vào bản thân, kết nối với vũ trụ và để tâm hồn bạn được nuôi dưỡng bằng niềm tin và sự bình yên.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/db/RWS_Tarot_17_Star.jpg"
-  },
-  {
-    name: "The Moon (XVIII)",
-    suit: "Ẩn Chính",
-    keywords: "Ảo giác, Vô thức, Sợ hãi, Trực giác, Bí ẩn",
-    description: "The Moon mô tả một con đường mờ ảo dưới ánh trăng, với chó và sói tru lên, tượng trưng cho bản năng và tiềm thức. Một con tôm bò lên từ mặt hồ – đại diện cho cảm xúc sâu kín.",
-    meaning: "Lá Moon kêu gọi bạn kết nối với trực giác thay vì lý trí. Những gì bạn thấy chưa hẳn là sự thật – hãy cẩn trọng với ảo tưởng và tự lừa dối.\n▿\nĐây là lúc đào sâu vào tâm thức và đối mặt với nỗi sợ. Tin vào giọng nói nội tâm và bước đi chậm rãi nhưng chắc chắn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/7/7f/RWS_Tarot_18_Moon.jpg"
-  },
-  {
-    name: "The Sun (XIX)",
-    suit: "Ẩn Chính",
-    keywords: "Thành công, Lạc quan, Tỏa sáng, Niềm vui, Tuổi thơ",
-    description: "The Sun thể hiện một đứa trẻ cưỡi ngựa trắng, vẫy cờ đỏ, phía sau là mặt trời chói lọi. Lá bài đại diện cho sự hân hoan, ánh sáng, và niềm tin vô điều kiện vào cuộc sống.",
-    meaning: "Lá bài này là tín hiệu của sự rõ ràng, hạnh phúc và thành tựu. Bạn đang được soi sáng bởi năng lượng tích cực và thu hút những điều tốt đẹp.\n▿\nNó cũng khuyến khích bạn sống thật với bản thân, đón nhận niềm vui giản đơn và kết nối với phần hồn nhiên trong bạn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/1/17/RWS_Tarot_19_Sun.jpg"
-  },
-  {
-    name: "Judgement (XX)",
-    suit: "Ẩn Chính",
-    keywords: "Thức tỉnh, Đánh giá, Tái sinh, Trách nhiệm, Tha thứ",
-    description: "Lá Judgement mô tả các linh hồn trỗi dậy khỏi nấm mồ, được đánh thức bởi tiếng kèn thiên thần. Nó biểu trưng cho sự đánh giá và thức tỉnh tâm linh.",
-    meaning: "Judgement là lời kêu gọi bạn đánh giá cuộc sống một cách sâu sắc – tha thứ, học hỏi từ quá khứ và tiến đến tương lai với tinh thần mới.\n▿\nLá bài này thúc đẩy sự tự nhận thức, phục sinh và làm lại từ đầu. Bạn đang bước vào một giai đoạn hoàn toàn mới với tâm thế rõ ràng hơn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/dd/RWS_Tarot_20_Judgement.jpg"
-  },
-  {
-    name: "The World (XXI)",
-    suit: "Ẩn Chính",
-    keywords: "Hoàn thành, Thành tựu, Hợp nhất, Viên mãn, Vòng tròn cuộc đời",
-    description: "The World mô tả một hình nhân nữ nhảy múa trong vòng nguyệt quế, xung quanh là bốn sinh vật đại diện cho bốn nguyên tố và bốn phương hướng.",
-    meaning: "The World báo hiệu kết thúc viên mãn của một chu kỳ. Bạn đã vượt qua thử thách và đạt được thành tựu lớn.\n▿\nĐây là thời điểm bạn cảm nhận sự kết nối với vũ trụ, với bản thân, và với mọi điều trong cuộc sống. Một hành trình khép lại để một hành trình mới bắt đầu.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/ff/RWS_Tarot_21_World.jpg"
-  },
-
-//Ẩn Phụ
-  {
-    name: "Ace of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Khởi đầu mới, Năng lượng, Đam mê, Sáng tạo",
-    description: "Ace of Wands mô tả một bàn tay cầm một cây gậy bốc cháy, tượng trưng cho sự khởi đầu tràn đầy năng lượng và tiềm năng sáng tạo.",
-    meaning: "Ace of Wands báo hiệu một khởi đầu mới với nguồn năng lượng tràn đầy, sự nhiệt huyết và cảm hứng. Đây là thời điểm tốt để bắt đầu dự án mới hoặc theo đuổi đam mê.\n▿\nLá bài cũng kêu gọi bạn hãy mạnh dạn hành động và tận dụng thời cơ, đừng sợ thất bại vì sự nhiệt huyết sẽ giúp bạn vượt qua.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/1/11/Wands01.jpg"
-  },
-  {
-    name: "Two of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Lựa chọn, Kế hoạch, Tầm nhìn, Quyết đoán",
-    description: "Two of Wands mô tả một người đàn ông đứng trên một bức tường, tay cầm quả cầu, nhìn ra xa với hai cây gậy bên cạnh, biểu tượng cho sự chuẩn bị và dự đoán tương lai.",
-    meaning: "Two of Wands thể hiện giai đoạn bạn đang cân nhắc các lựa chọn và lập kế hoạch cho tương lai. Đây là lúc bạn cần sự quyết đoán và tầm nhìn xa để tiến bước.\n▿\nLá bài nhắc nhở bạn không nên trì hoãn, hãy hành động khi đã chuẩn bị sẵn sàng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/0/0f/Wands02.jpg"
-  },
-  {
-    name: "Three of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Mở rộng, Cơ hội, Thành công, Tầm nhìn",
-    description: "Three of Wands mô tả một người đứng trên bờ biển, nhìn ra biển rộng với ba cây gậy bên cạnh, biểu tượng cho việc mở rộng và chờ đợi thành quả.",
-    meaning: "Three of Wands báo hiệu thành công và sự mở rộng trong kế hoạch của bạn. Đây là thời điểm bạn có thể kỳ vọng vào kết quả tích cực từ nỗ lực đã bỏ ra.\n▿\nLá bài cũng khuyến khích bạn tiếp tục mở rộng tầm nhìn và đón nhận cơ hội mới.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/ff/Wands03.jpg/250px-Wands03.jpg"
-  },
-  {
-    name: "Four of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Ăn mừng, Ổn định, An cư, Hòa hợp",
-    description: "Four of Wands mô tả một cảnh lễ hội với hai người cầm hoa, đứng dưới mái vòm trang trí với bốn cây gậy, biểu tượng cho sự ổn định và niềm vui.",
-    meaning: "Four of Wands báo hiệu sự ổn định, hòa hợp trong cuộc sống và các mối quan hệ. Đây là thời điểm để ăn mừng thành quả và tạo dựng nền tảng vững chắc.\n▿\nLá bài cũng tượng trưng cho những dịp vui vẻ, lễ kỷ niệm hoặc sự đoàn tụ gia đình.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/a/a4/Wands04.jpg"
-  },
-  {
-    name: "Five of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Xung đột, Cạnh tranh, Thách thức, Tranh luận",
-    description: "Five of Wands mô tả năm người đang cầm cây gậy, dường như đang tranh đấu hoặc thi đấu với nhau, biểu tượng cho xung đột và cạnh tranh.",
-    meaning: "Five of Wands thể hiện các thách thức và mâu thuẫn trong cuộc sống. Bạn có thể đang phải đối mặt với sự cạnh tranh hoặc tranh luận.\n▿\nLá bài khuyến khích bạn đối mặt và giải quyết xung đột một cách khôn ngoan, không nên né tránh.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/9/9d/Wands05.jpg"
-  },
-  {
-    name: "Six of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Chiến thắng, Tự tin, Công nhận, Thành công",
-    description: "Six of Wands mô tả một người cưỡi ngựa, đội vòng nguyệt quế, được đám đông chúc mừng, biểu tượng cho sự chiến thắng và công nhận.",
-    meaning: "Six of Wands là dấu hiệu của thành công và sự công nhận từ người khác. Bạn đã vượt qua thử thách và đang được tôn vinh.\n▿\nLá bài khuyến khích bạn duy trì sự tự tin và tiếp tục tiến bước trên con đường thành công.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/3b/Wands06.jpg"
-  },
-  {
-    name: "Seven of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Bảo vệ, Đấu tranh, Kiên trì, Thách thức",
-    description: "Seven of Wands mô tả một người đứng trên đồi cao, cầm cây gậy chống lại những người khác phía dưới, biểu tượng cho sự bảo vệ và chiến đấu.",
-    meaning: "Seven of Wands cho thấy bạn đang phải bảo vệ quan điểm hoặc vị trí của mình trước những thách thức và cạnh tranh.\n▿\nLá bài nhắc nhở bạn giữ vững lập trường và kiên trì chiến đấu cho những gì mình tin tưởng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/e/e4/Wands07.jpg"
-  },
-  {
-    name: "Eight of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Tốc độ, Di chuyển, Thông tin, Thay đổi nhanh",
-    description: "Eight of Wands mô tả tám cây gậy bay nhanh trên bầu trời, biểu tượng cho sự nhanh chóng và chuyển động.",
-    meaning: "Eight of Wands báo hiệu sự thay đổi nhanh chóng, các sự kiện diễn ra với tốc độ cao hoặc thông tin mới đến nhanh.\n▿\nLá bài khuyến khích bạn chuẩn bị và sẵn sàng ứng phó với các biến động bất ngờ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/6/6b/Wands08.jpg"
-  },
-  {
-    name: "Nine of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Kiên trì, Bảo vệ, Mệt mỏi, Cảnh giác",
-    description: "Nine of Wands mô tả một người với băng bó trên đầu, đứng trước tám cây gậy, biểu tượng cho sự kiên trì và cảnh giác sau nhiều khó khăn.",
-    meaning: "Nine of Wands thể hiện sự kiên trì và quyết tâm bảo vệ những gì bạn đã đạt được, dù bạn có thể cảm thấy mệt mỏi và tổn thương.\n▿\nLá bài khuyên bạn đừng bỏ cuộc và hãy cảnh giác với những thách thức còn lại.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/4/4d/Tarot_Nine_of_Wands.jpg"
-  },
-  {
-    name: "Ten of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Gánh nặng, Trách nhiệm, Áp lực, Kiệt sức",
-    description: "Ten of Wands mô tả một người đàn ông gánh trên vai mười cây gậy, biểu tượng cho sự gánh nặng và áp lực.",
-    meaning: "Ten of Wands biểu thị sự gánh vác trách nhiệm lớn và áp lực kéo dài, có thể dẫn đến mệt mỏi và kiệt sức.\n▿\nLá bài nhắc bạn nên tìm cách chia sẻ hoặc giảm bớt gánh nặng để tránh kiệt quệ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/0/0b/Wands10.jpg"
-  },
-  {
-    name: "Page of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Khám phá, Trẻ trung, Nhiệt huyết, Tin mới",
-    description: "Page of Wands mô tả một thanh niên cầm cây gậy, nhìn lên với vẻ tò mò và nhiệt huyết, biểu tượng cho sự khởi đầu và khám phá.",
-    meaning: "Page of Wands báo hiệu một thông điệp mới hoặc cơ hội khởi đầu, kèm theo sự nhiệt huyết và sáng tạo.\n▿\nLá bài khuyến khích bạn giữ tinh thần trẻ trung và khám phá thế giới xung quanh.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/6/6a/Wands11.jpg"
-  },
-  {
-    name: "Knight of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Năng lượng, Mạo hiểm, Quyết đoán, Hành động",
-    description: "Knight of Wands mô tả một hiệp sĩ cưỡi ngựa phi nhanh, cầm cây gậy với ánh mắt quyết đoán, biểu tượng cho hành động và mạo hiểm.",
-    meaning: "Knight of Wands đại diện cho năng lượng dồi dào, sự mạo hiểm và quyết đoán trong hành động.\n▿\nLá bài khuyến khích bạn dũng cảm bước tới và theo đuổi mục tiêu một cách nhiệt tình.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/1/16/Wands12.jpg"
-  },
-  {
-    name: "Queen of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Sức mạnh nội tâm, Quyết đoán, Nhiệt huyết, Quyền lực",
-    description: "Queen of Wands mô tả một người phụ nữ ngồi trên ngai, tay cầm cây gậy, ánh mắt tự tin và đầy sức sống, biểu tượng cho sức mạnh và sự tự tin.",
-    meaning: "Queen of Wands biểu thị sức mạnh nội tâm, sự quyết đoán và nhiệt huyết trong cuộc sống.\n▿\nLá bài khuyến khích bạn phát huy quyền lực cá nhân và giữ vững niềm tin vào bản thân.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/0/0d/Wands13.jpg"
-  },
-  {
-    name: "King of Wands",
-    suit: "Ẩn Phụ",
-    keywords: "Lãnh đạo, Tầm nhìn, Quyền lực, Trí tuệ",
-    description: "King of Wands mô tả một vị vua ngồi trên ngai, cầm cây gậy, biểu tượng cho sự lãnh đạo mạnh mẽ, tầm nhìn xa và trí tuệ.",
-    meaning: "King of Wands đại diện cho khả năng lãnh đạo, tầm nhìn chiến lược và sự quyết đoán.\n▿\nLá bài khuyên bạn hãy nắm bắt cơ hội, thể hiện vai trò lãnh đạo và sử dụng trí tuệ để vượt qua thử thách.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Wands14.jpg/250px-Wands14.jpg"
-  },
-  {
-    name: "Ace of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Khởi đầu mới, Tình cảm, Cảm xúc, Tràn đầy năng lượng",
-    description: "Ace of Cups mô tả một chiếc cốc đang tràn đầy nước, biểu tượng của tình cảm và cảm xúc dồi dào đang bắt đầu.",
-    meaning: "Ace of Cups báo hiệu một sự khởi đầu mới trong các mối quan hệ, tình yêu hoặc cảm xúc. Đây là thời điểm bạn mở lòng và đón nhận yêu thương.\n▿\nLá bài cũng thể hiện sự sáng tạo và niềm vui nội tâm.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/36/Cups01.jpg"
-  },
-  {
-    name: "Two of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Hợp tác, Tình yêu, Kết nối, Thấu hiểu",
-    description: "Two of Cups mô tả hai người đang trao đổi chiếc cốc với nhau, biểu tượng của sự hợp tác và tình yêu đôi lứa.",
-    meaning: "Two of Cups cho thấy sự kết nối sâu sắc giữa hai người, có thể là tình yêu, tình bạn hoặc hợp tác kinh doanh.\n▿\nĐây là dấu hiệu của sự thấu hiểu và đồng thuận.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/f8/Cups02.jpg"
-  },
-  {
-    name: "Three of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Lễ hội, Hạnh phúc, Tình bạn, Chia sẻ",
-    description: "Three of Cups mô tả ba người phụ nữ nâng cốc chúc mừng nhau, biểu tượng của niềm vui và sự đoàn kết.",
-    meaning: "Three of Cups báo hiệu những khoảnh khắc hạnh phúc bên bạn bè và gia đình, cùng chia sẻ niềm vui và thành công.\n▿\nLá bài khuyến khích bạn tận hưởng và ghi nhận những mối quan hệ tốt đẹp.",
-    image_url: "https://hoctarot.com/wp-content/uploads/2020/01/cups03.jpg"
-  },
-  {
-    name: "Four of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Bất mãn, Suy ngẫm, Cơ hội bị bỏ lỡ",
-    description: "Four of Cups mô tả một người ngồi dưới gốc cây, dường như đang suy nghĩ và không chú ý đến chiếc cốc được trao cho mình.",
-    meaning: "Four of Cups cảnh báo bạn đang bỏ lỡ những cơ hội tốt vì quá tập trung vào sự bất mãn hoặc suy nghĩ tiêu cực.\n▿\nHãy mở lòng đón nhận và suy nghĩ tích cực hơn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/35/Cups04.jpg"
-  },
-  {
-    name: "Five of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Mất mát, Hối tiếc, Đau buồn, Cảm xúc tiêu cực",
-    description: "Five of Cups mô tả một người đứng cúi đầu, trước mặt là ba chiếc cốc bị đổ, tượng trưng cho sự mất mát và thất vọng.",
-    meaning: "Five of Cups thể hiện nỗi đau và sự hối tiếc về những gì đã mất, nhưng cũng nhắc bạn hãy nhìn vào những gì còn lại để tiếp tục tiến bước.\n▿\nĐừng để cảm xúc tiêu cực chi phối bạn quá lâu.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/d7/Cups05.jpg"
-  },
-  {
-    name: "Six of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Ký ức, Hồi tưởng, Tình cảm trong sáng, Quà tặng",
-    description: "Six of Cups mô tả hai đứa trẻ trao nhau những chiếc cốc đầy hoa, biểu tượng của ký ức tuổi thơ và tình cảm trong sáng.",
-    meaning: "Six of Cups gợi nhớ về quá khứ, những ký ức đẹp và sự ngây thơ trong tình cảm.\n▿\nLá bài khuyên bạn hãy giữ gìn những giá trị tinh thần và tình cảm chân thật.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/1/17/Cups06.jpg"
-  },
-  {
-    name: "Seven of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Lựa chọn, Mơ mộng, Ảo tưởng, Cơ hội",
-    description: "Seven of Cups mô tả một người đứng trước bảy chiếc cốc chứa những hình ảnh khác nhau, biểu tượng của các lựa chọn và ảo tưởng.",
-    meaning: "Seven of Cups cảnh báo bạn không nên mơ mộng quá nhiều mà cần cân nhắc kỹ các lựa chọn trước khi quyết định.\n▿\nLá bài cũng thể hiện sự đa dạng cơ hội nhưng dễ dẫn đến phân tâm hoặc lưỡng lự.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ae/Cups07.jpg/960px-Cups07.jpg"
-  },
-  {
-    name: "Eight of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Rời bỏ, Tìm kiếm, Hành trình mới, Buông bỏ",
-    description: "Eight of Cups mô tả một người đang rời khỏi những chiếc cốc xếp chồng, đi về phía chân núi, biểu tượng của việc từ bỏ để tìm kiếm điều mới.",
-    meaning: "Eight of Cups thể hiện quyết định từ bỏ những gì không còn ý nghĩa để bắt đầu hành trình mới, dù điều đó có thể đau lòng.\n▿\nLá bài khuyến khích bạn dũng cảm buông bỏ quá khứ để tiến tới tương lai tốt đẹp hơn.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/6/60/Cups08.jpg"
-  },
-  {
-    name: "Nine of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Hạnh phúc, Thỏa mãn, Ước mơ thành hiện thực, Niềm vui",
-    description: "Nine of Cups mô tả một người ngồi trước chín chiếc cốc được xếp đều, biểu tượng của sự hài lòng và viên mãn.",
-    meaning: "Nine of Cups thường được gọi là 'lá bài mong muốn', báo hiệu sự thỏa mãn và niềm vui khi những ước mơ trở thành hiện thực.\n▿\nLá bài khích lệ bạn tận hưởng thành quả và niềm vui hiện tại.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/2/24/Cups09.jpg"
-  },
-  {
-    name: "Ten of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Hạnh phúc gia đình, Tình yêu trọn vẹn, Hòa hợp, Niềm vui bền lâu",
-    description: "Ten of Cups mô tả một gia đình hạnh phúc dưới cầu vồng với mười chiếc cốc, biểu tượng của tình yêu và sự hòa hợp bền lâu.",
-    meaning: "Ten of Cups là biểu tượng của hạnh phúc gia đình và sự hòa hợp trong các mối quan hệ.\n▿\nLá bài cho thấy niềm vui bền lâu và sự viên mãn trong tình yêu và cuộc sống gia đình.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/8/84/Cups10.jpg"
-  },
-  {
-    name: "Page of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Tin tức, Trực giác, Sáng tạo, Tình cảm mới",
-    description: "Page of Cups mô tả một thanh niên cầm chiếc cốc với một con cá nhỏ nhô ra, biểu tượng của trực giác và sự sáng tạo mới mẻ.",
-    meaning: "Page of Cups báo hiệu tin tức hoặc một khởi đầu mới trong tình cảm và sáng tạo.\n▿\nLá bài khuyến khích bạn tin tưởng vào trực giác và đón nhận những cảm xúc mới mẻ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ad/Cups11.jpg/250px-Cups11.jpg"
-  },
-  {
-    name: "Knight of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Lãng mạn, Hành động theo trái tim, Sáng tạo, Tình cảm sâu sắc",
-    description: "Knight of Cups mô tả một hiệp sĩ cưỡi ngựa, tay cầm chiếc cốc, biểu tượng của sự lãng mạn và hành động theo cảm xúc.",
-    meaning: "Knight of Cups đại diện cho người hành động theo trái tim và trực giác, thể hiện sự lãng mạn và sáng tạo.\n▿\nLá bài cũng có thể nhắc đến sự mơ mộng và đam mê trong cuộc sống.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/fa/Cups12.jpg"
-  },
-  {
-    name: "Queen of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Trực giác, Tình cảm sâu sắc, Quan tâm, Thấu hiểu",
-    description: "Queen of Cups mô tả một người phụ nữ ngồi trên ngai, cầm chiếc cốc, biểu tượng của trực giác và tình cảm sâu sắc.",
-    meaning: "Queen of Cups là biểu tượng của sự thấu hiểu và quan tâm, trực giác mạnh mẽ và cảm xúc sâu sắc.\n▿\nLá bài khuyên bạn nên lắng nghe cảm xúc và trực giác của bản thân cũng như người khác.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/6/62/Cups13.jpg"
-  },
-  {
-    name: "King of Cups",
-    suit: "Ẩn Phụ",
-    keywords: "Cân bằng cảm xúc, Khôn ngoan, Lãnh đạo, Bình tĩnh",
-    description: "King of Cups mô tả một vị vua ngồi trên ngai, cầm chiếc cốc, biểu tượng của sự cân bằng cảm xúc và trí tuệ.",
-    meaning: "King of Cups đại diện cho sự cân bằng giữa cảm xúc và lý trí, sự khôn ngoan và khả năng lãnh đạo trong tình cảm.\n▿\nLá bài khuyến khích bạn giữ bình tĩnh và kiểm soát cảm xúc trong các tình huống khó khăn.",
-    image_url: "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRwI8aPsBJiEEL17f580suPnWsyQ52ipBRUfA&s"
-  },
-  {
-    name: "Ace of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Khởi đầu mới, Sự thật, Công lý, Quyết đoán",
-    description: "Ace of Swords thể hiện một thanh kiếm thẳng đứng với vương miện và vòng nguyệt quế. Đây là biểu tượng của sự sáng suốt, ý chí mạnh mẽ và sự khởi đầu của trí tuệ mới.",
-    meaning: "Ace of Swords báo hiệu một sự khởi đầu đầy mạnh mẽ trong tư duy và ý chí. Đây là thời điểm bạn cần sử dụng sự sáng suốt và lý trí để giải quyết vấn đề, đem lại công lý và sự thật.\n\n▿\n\nLá bài khuyến khích bạn quyết đoán và rõ ràng trong suy nghĩ và hành động, tránh những mơ hồ hoặc lưỡng lự.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-01.jpg"
-  },
-  {
-    name: "Two of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Đánh đổi, Lưỡng lự, Ra quyết định, Cân bằng",
-    description: "Two of Swords mô tả một người phụ nữ bịt mắt, giữ hai thanh kiếm chéo nhau, biểu thị sự lựa chọn khó khăn và lưỡng lự giữa các lựa chọn.",
-    meaning: "Two of Swords cho thấy bạn đang đối diện với một quyết định khó khăn và cảm thấy bị mắc kẹt. Bạn cần cân bằng giữa cảm xúc và lý trí để chọn lựa con đường đúng đắn.\n\n▿\n\nLá bài nhắc bạn không nên trì hoãn quyết định quá lâu, vì sự lưỡng lự chỉ khiến tình hình thêm căng thẳng.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-02.jpg"
-  },
-  {
-    name: "Three of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Nỗi đau, Thất vọng, Phản bội, Chia ly",
-    description: "Three of Swords thể hiện một trái tim bị xuyên thủng bởi ba thanh kiếm, biểu tượng của nỗi đau sâu sắc và sự tổn thương trong tình cảm.",
-    meaning: "Three of Swords báo hiệu sự tổn thương, mất mát hoặc phản bội. Đây là khoảng thời gian khó khăn với cảm xúc đau buồn và thất vọng.\n\n▿\n\nTuy nhiên, lá bài cũng nhắc nhở bạn cần chấp nhận và vượt qua nỗi đau để trưởng thành và chữa lành tâm hồn.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-03.jpg"
-  },
-  {
-    name: "Four of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Nghỉ ngơi, Phục hồi, Suy ngẫm, Bình yên",
-    description: "Four of Swords mô tả một người đang nghỉ ngơi trong nhà thờ, biểu tượng của sự tĩnh lặng và phục hồi sức khỏe thể chất và tinh thần.",
-    meaning: "Four of Swords khuyên bạn nên nghỉ ngơi, lấy lại sức lực và suy ngẫm về những gì đã qua. Đây là lúc để tái tạo năng lượng và chuẩn bị cho thử thách mới.\n\n▿\n\nLá bài nhấn mạnh tầm quan trọng của sự bình yên và cân bằng nội tâm.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-04.jpg"
-  },
-  {
-    name: "Five of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Thất bại, Xung đột, Thất vọng, Đánh đổi",
-    description: "Five of Swords thể hiện một người cầm ba thanh kiếm, trong khi hai người khác bỏ đi, biểu tượng cho chiến thắng không trọn vẹn và những xung đột gây mất mát.",
-    meaning: "Five of Swords cảnh báo về những cuộc xung đột, chiến thắng không đáng giá hoặc sự thất vọng từ những cuộc tranh chấp.\n\n▿\n\nBạn cần cân nhắc kỹ lưỡng trước khi tham gia vào các cuộc đối đầu để tránh thiệt hại không cần thiết.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-05.jpg"
-  },
-  {
-    name: "Six of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Chuyển đổi, Di cư, Chữa lành, Hy vọng",
-    description: "Six of Swords mô tả một người chèo thuyền đưa người khác qua vùng nước yên bình, biểu tượng của sự di chuyển và chữa lành.",
-    meaning: "Six of Swords biểu thị sự chuyển đổi tích cực, vượt qua khó khăn và bắt đầu giai đoạn mới.\n\n▿\n\nLá bài khuyến khích bạn tiếp tục tiến lên, tin tưởng vào sự bình yên và hy vọng phía trước.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-06.jpg"
-  },
-  {
-    name: "Seven of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Lừa dối, Lén lút, Chiến lược, Tính toán",
-    description: "Seven of Swords cho thấy một người đang lén lấy năm thanh kiếm, biểu tượng của sự gian trá và chiến thuật tinh vi.",
-    meaning: "Seven of Swords cảnh báo về sự không trung thực, gian lận hoặc cần sự khéo léo để tránh rắc rối.\n\n▿\n\nLá bài cũng có thể biểu thị việc bạn cần suy nghĩ chiến lược và tính toán kỹ càng trong hành động.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-07.jpg"
-  },
-  {
-    name: "Eight of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Bị hạn chế, Lo lắng, Mắc kẹt, Thiếu tự do",
-    description: "Eight of Swords mô tả một người phụ nữ bị trói tay chân, đứng giữa tám thanh kiếm dựng đứng, tượng trưng cho sự hạn chế và bế tắc.",
-    meaning: "Eight of Swords biểu thị trạng thái bị mắc kẹt, cảm giác lo lắng và thiếu tự do.\n\n▿\n\nLá bài nhắc bạn cần thay đổi tư duy và tìm cách thoát khỏi những giới hạn do chính mình đặt ra.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-08.jpg"
-  },
-  {
-    name: "Nine of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Lo âu, Đêm mất ngủ, Căng thẳng, Sợ hãi",
-    description: "Nine of Swords mô tả một người ngồi trên giường, hai tay che mặt, biểu hiện sự lo âu và mất ngủ.",
-    meaning: "Nine of Swords chỉ ra sự lo lắng, căng thẳng kéo dài và những cơn ác mộng trong tâm trí.\n\n▿\n\nLá bài khuyên bạn cần tìm cách giải tỏa căng thẳng và đối mặt với nỗi sợ hãi để lấy lại sự bình yên.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-09.jpg"
-  },
-  {
-    name: "Ten of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Kết thúc đau đớn, Sự sụp đổ, Mất mát, Tái sinh",
-    description: "Ten of Swords thể hiện một người nằm úp mặt với mười thanh kiếm đâm sau lưng, biểu tượng của sự kết thúc đau thương.",
-    meaning: "Ten of Swords báo hiệu một kết thúc bi thảm hoặc sự thất bại sâu sắc, nhưng cũng là dấu hiệu cho sự tái sinh và bắt đầu mới sau khổ đau.\n\n▿\n\nLá bài khuyên bạn hãy chấp nhận kết thúc để mở ra cơ hội mới.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-10.jpg"
-  },
-  {
-    name: "Page of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Khám phá, Trẻ trung, Tò mò, Thông minh",
-    description: "Page of Swords mô tả một thanh niên cầm thanh kiếm, mắt nhìn xa xăm thể hiện sự tò mò và khao khát kiến thức.",
-    meaning: "Page of Swords đại diện cho sự tò mò, ham học hỏi và khả năng thích nghi nhanh.\n\n▿\n\nLá bài khuyến khích bạn giữ vững tinh thần tìm kiếm tri thức và sẵn sàng khám phá điều mới mẻ.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-11.jpg"
-  },
-  {
-    name: "Knight of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Hành động nhanh, Nhiệt huyết, Quyết đoán, Năng lượng",
-    description: "Knight of Swords thể hiện một hiệp sĩ cưỡi ngựa, cầm thanh kiếm giương cao, biểu tượng của sự quyết đoán và năng lượng mạnh mẽ.",
-    meaning: "Knight of Swords biểu thị sự hành động nhanh chóng, nhiệt huyết và quyết đoán trong việc theo đuổi mục tiêu.\n\n▿\n\nLá bài cũng cảnh báo về việc vội vàng hoặc thiếu suy nghĩ trước khi hành động.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-12.jpg"
-  },
-  {
-    name: "Queen of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Trí tuệ, Độc lập, Sự thật, Khắt khe",
-    description: "Queen of Swords mô tả một người phụ nữ cầm thanh kiếm, ánh mắt sắc bén thể hiện trí tuệ và sự nghiêm khắc.",
-    meaning: "Queen of Swords đại diện cho sự thông minh, độc lập và trung thực.\n\n▿\n\nLá bài khuyên bạn nên giữ sự rõ ràng và công bằng trong các quyết định, đồng thời tránh bị ảnh hưởng bởi cảm xúc tiêu cực.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-13.jpg"
-  },
-  {
-    name: "King of Swords",
-    suit: "Ẩn Phụ",
-    keywords: "Quyền lực, Trí tuệ, Công lý, Lãnh đạo",
-    description: "King of Swords thể hiện một vị vua cầm thanh kiếm, ánh mắt nghiêm nghị và biểu tượng quyền lực và công lý.",
-    meaning: "King of Swords biểu thị sự lãnh đạo bằng trí tuệ, công lý và sự rõ ràng.\n\n▿\n\nLá bài khuyên bạn nên sử dụng sự lý trí và công bằng để giải quyết các vấn đề và dẫn dắt người khác.",
-    image_url: "https://tarottools.com/wp-content/uploads/2016/05/Swords-14.jpg"
-  },
-  {
-    name: "Ace of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Khởi đầu, Cơ hội, Thịnh vượng, Tiềm năng, Tài chính",
-    description: "Ace of Pentacles mô tả một bàn tay xuất hiện từ đám mây cầm đồng tiền vàng lớn, biểu tượng cho cơ hội mới trong tài chính, sự nghiệp hoặc phát triển vật chất. Đây là sự khởi đầu thuận lợi cho sự thịnh vượng và thành công lâu dài.",
-    meaning: "Ace of Pentacles báo hiệu một cơ hội tài chính hoặc sự nghiệp mới. Đây là thời điểm thuận lợi để bắt đầu dự án hoặc đầu tư. Lá bài khuyến khích bạn nắm bắt cơ hội để xây dựng nền tảng vững chắc cho tương lai. Nó cũng tượng trưng cho sự ổn định, tăng trưởng và thành công bền vững.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/fd/Pents01.jpg"
-  },
-  {
-    name: "Two of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Cân bằng, Linh hoạt, Quản lý, Thay đổi, Ưu tiên",
-    description: "Two of Pentacles mô tả một người jongler hai đồng tiền vàng trong một vòng vô cực, biểu tượng cho sự linh hoạt và khả năng duy trì cân bằng giữa các trách nhiệm và thay đổi liên tục trong cuộc sống.",
-    meaning: "Lá bài này nhắc bạn về khả năng thích ứng và cân bằng các mặt trong cuộc sống, từ công việc, tài chính đến các mối quan hệ. Bạn có thể đang phải đối mặt với nhiều việc cùng lúc, cần ưu tiên và quản lý tốt thời gian để giữ sự ổn định. Nó cũng khuyến khích bạn đón nhận sự thay đổi một cách nhẹ nhàng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Pents02.jpg/250px-Pents02.jpg"
-  },
-  {
-    name: "Three of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Hợp tác, Kỹ năng, Thực hiện, Sáng tạo, Thành tựu",
-    description: "Ba người thợ đang làm việc cùng nhau để xây dựng một công trình, tượng trưng cho sự hợp tác, kỹ năng chuyên môn và việc thực hiện dự án một cách bài bản.",
-    meaning: "Three of Pentacles báo hiệu thành công thông qua sự phối hợp, làm việc nhóm và phát huy kỹ năng cá nhân. Bạn được khích lệ để hợp tác với người khác và đánh giá cao đóng góp của từng cá nhân. Đây cũng là dấu hiệu của sự công nhận năng lực và tiến triển rõ rệt trong công việc hoặc dự án.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/42/Pents03.jpg/250px-Pents03.jpg"
-  },
-  {
-    name: "Four of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Kiểm soát, Tiết kiệm, Bảo vệ, Sự ổn định, Bảo thủ",
-    description: "Người đàn ông ngồi chặt tay ôm lấy một đồng tiền vàng, hai chân đặt lên đồng tiền khác, thể hiện sự kiểm soát chặt chẽ tài sản và sự bảo thủ trong chi tiêu.",
-    meaning: "Lá bài cảnh báo sự bám víu quá mức vào vật chất, tiền bạc hoặc sự an toàn. Bạn có thể đang quá cứng nhắc, sợ mất mát nên giữ chặt tài sản, dẫn đến hạn chế cơ hội mới. Đồng thời cũng nhắc bạn cần cân bằng giữa việc giữ gìn và mở rộng, không nên quá bảo thủ gây tổn thất về lâu dài.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/3/35/Pents04.jpg"
-  },
-  {
-    name: "Five of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Thiếu thốn, Khó khăn, Cô đơn, Mất mát, Hỗ trợ",
-    description: "Hai người đang bước qua một cửa sổ nhà thờ phát sáng với các đồng tiền vàng bên trong, thể hiện cảnh nghèo đói, cô đơn và thiếu thốn vật chất lẫn tinh thần.",
-    meaning: "Five of Pentacles biểu thị cho những khó khăn về tài chính, mất mát hoặc cảm giác bị bỏ rơi, cô lập. Lá bài nhắc bạn rằng dù đang trong hoàn cảnh khó khăn, vẫn có sự hỗ trợ bên ngoài hoặc sự giúp đỡ từ người khác. Đừng ngần ngại nhận sự trợ giúp và hãy giữ hy vọng.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/96/Pents05.jpg/250px-Pents05.jpg"
-  },
-  {
-    name: "Six of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Hào phóng, Cân bằng, Hỗ trợ, Cho và nhận, Cộng đồng",
-    description: "Một người giàu có đang phân phát tiền cho những người nghèo, thể hiện sự hào phóng và sự cân bằng trong cho và nhận.",
-    meaning: "Lá bài này biểu thị sự cân bằng trong việc trao đi và nhận lại, hào phóng và sự hỗ trợ trong cộng đồng hoặc mối quan hệ. Bạn có thể đang nhận hoặc cho đi sự giúp đỡ, tài chính hoặc tình cảm. Đây cũng là dấu hiệu của sự công bằng và thành công được chia sẻ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/a/a6/Pents06.jpg"
-  },
-  {
-    name: "Seven of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Kiên nhẫn, Đánh giá, Đầu tư, Đợi chờ, Phát triển",
-    description: "Một người nông dân đứng nhìn vào cây trồng có các đồng tiền vàng, biểu tượng cho sự đầu tư, kiên nhẫn và chờ đợi kết quả.",
-    meaning: "Seven of Pentacles khuyến khích bạn kiên nhẫn và đánh giá lại tiến trình công việc hoặc dự án của mình. Bạn đang đầu tư thời gian, công sức và cần sự kiên trì để đạt kết quả mong muốn. Lá bài nhắc bạn không nên nóng vội mà cần kiên nhẫn đợi chờ thành quả.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6a/Pents07.jpg/250px-Pents07.jpg"
-  },
-  {
-    name: "Eight of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Chăm chỉ, Học hỏi, Kỹ năng, Sáng tạo, Phát triển",
-    description: "Một người thợ đang chăm chỉ khắc đồng tiền vàng, biểu tượng của sự chăm chỉ, trau dồi kỹ năng và phát triển nghề nghiệp.",
-    meaning: "Eight of Pentacles cho thấy bạn đang làm việc chăm chỉ để hoàn thiện kỹ năng và đạt được sự chuyên nghiệp trong lĩnh vực của mình. Đây là thời điểm để bạn học hỏi và phát triển, tập trung vào công việc và sự sáng tạo để đạt thành tựu.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/4/49/Pents08.jpg"
-  },
-  {
-    name: "Nine of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Thịnh vượng, Độc lập, Tự do, Thành công, An nhàn",
-    description: "Một người phụ nữ đứng trong khu vườn sang trọng với chim ưng trên tay, biểu tượng cho sự thịnh vượng, độc lập và tự do tài chính.",
-    meaning: "Nine of Pentacles biểu thị sự thành công, tự lập và tận hưởng thành quả lao động. Bạn đã đạt được sự ổn định tài chính và có thể tận hưởng cuộc sống một cách an nhàn. Lá bài khuyến khích bạn giữ vững sự độc lập và tiếp tục phát triển bản thân.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/f/f0/Pents09.jpg"
-  },
-  {
-    name: "Ten of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Gia đình, Thừa kế, Ổn định, An toàn, Truyền thống",
-    description: "Một gia đình nhiều thế hệ bên cạnh một ngôi nhà lớn, biểu tượng cho sự thịnh vượng lâu dài, gia đình và truyền thống.",
-    meaning: "Ten of Pentacles nói về sự ổn định tài chính lâu dài, sự gắn kết gia đình và truyền thống được duy trì. Đây là thời điểm để bạn tận hưởng thành quả từ sự đầu tư lâu dài, cũng như kế hoạch cho thế hệ tương lai. Lá bài biểu thị sự an toàn và thịnh vượng toàn diện.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/4/42/Pents10.jpg"
-  },
-  {
-    name: "Page of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Học hỏi, Cơ hội, Tập trung, Sáng tạo, Khởi đầu",
-    description: "Một người trẻ tuổi đang cầm đồng tiền vàng và nhìn chăm chú vào nó, biểu tượng cho sự tập trung, học hỏi và khởi đầu một dự án mới.",
-    meaning: "Page of Pentacles đại diện cho sự ham học hỏi, sự tập trung và cơ hội mới trong lĩnh vực tài chính hoặc học tập. Đây là thời điểm để bạn khám phá tiềm năng, bắt đầu dự án hoặc học một kỹ năng mới để phát triển bản thân.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/e/ec/Pents11.jpg"
-  },
-  {
-    name: "Knight of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Kiên trì, Chăm chỉ, Trách nhiệm, Bền bỉ, Ổn định",
-    description: "Một hiệp sĩ cưỡi ngựa đứng yên, cầm đồng tiền vàng, biểu tượng của sự kiên trì và trách nhiệm trong công việc.",
-    meaning: "Knight of Pentacles biểu thị sự chăm chỉ, kiên trì và trách nhiệm trong công việc hoặc dự án. Bạn tập trung vào việc hoàn thành mục tiêu một cách bền bỉ, không ngại khó khăn. Lá bài nhấn mạnh sự ổn định và đáng tin cậy.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/d/d5/Pents12.jpg"
-  },
-  {
-    name: "Queen of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Chăm sóc, Ổn định, Thực tế, Tài chính, Yêu thương",
-    description: "Một nữ hoàng cầm đồng tiền vàng, ngồi trong khu vườn xanh tươi, biểu tượng của sự chăm sóc, sự ổn định và thực tế trong tài chính.",
-    meaning: "Queen of Pentacles biểu thị sự chăm sóc, sự ổn định và khả năng quản lý tài chính một cách khôn ngoan. Bạn có thể đang tập trung vào gia đình, tài chính và môi trường sống, đồng thời duy trì sự cân bằng giữa các khía cạnh này. Lá bài cũng thể hiện sự yêu thương và bảo vệ.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/88/Pents13.jpg/250px-Pents13.jpg"
-  },
-  {
-    name: "King of Pentacles",
-    suit: "Ẩn Phụ",
-    keywords: "Thành công, Ổn định, Tài chính, Lãnh đạo, Bảo vệ",
-    description: "Một vị vua ngồi trên ngai vàng được trang trí bằng các đồng tiền vàng, biểu tượng cho quyền lực, sự giàu có và lãnh đạo trong lĩnh vực tài chính.",
-    meaning: "King of Pentacles đại diện cho sự thành công, quyền lực và sự ổn định về tài chính và vật chất. Bạn có khả năng lãnh đạo, quản lý tài chính và tạo dựng sự an toàn cho bản thân cũng như người khác. Lá bài cũng nhấn mạnh việc bảo vệ và duy trì thành quả lâu dài.",
-    image_url: "https://upload.wikimedia.org/wikipedia/commons/1/1c/Pents14.jpg"
-  }
-];
-
-const stopwords = new Set([
-    'là', 'và', 'của', 'trong', 'trên', 'với', 'một', 'những', 'các', 'đã', 'sẽ', 'không', 'có', 'được', 'từ', 'cho', 'về', 'khi', 'mà', 'này', 'ấy', 'nếu', 'như', 'tôi', 'anh', 'chị', 'em', 'chúng', 'họ', 'rằng', 'thì', 'ở', 'để', 'cũng', 'vậy', 'đi', 'lại', 'rồi', 'nhưng', 'còn', 'hay', 'ra', 'vào', 'bởi', 'do', 'đó', 'nữa', 'ai', 'gì', 'đâu', 'nào', 'chứ', 'đây', 'kia', 'sao', 'mà', 'tới', 'đến', 'theo', 'phải', 'trước', 'sau', 'trên', 'dưới', 'trong', 'ngoài', 'giữa', 'bên', 'cạnh', 'trên', 'đầu', 'cuối', 'giữa'
-]);
-
-function preprocessText(text) {
-    // Chuyển về chữ thường
-    text = text.toLowerCase();
-    // Loại bỏ ký tự không phải chữ cái và khoảng trắng (giữ lại dấu câu để tách câu)
-    // Để đơn giản, ta chỉ loại bỏ số và một số ký tự đặc biệt không mong muốn
-    text = text.replace(/[^a-z0-9àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ\s.,?!]/g, '');
-    return text;
-}
-
-function tokenizeAndFilterWords(sentence) {
-    // Tách từ và loại bỏ stop words
-    return WordTokenizer.tokenize(sentence).filter(word => !stopwords.has(word));
-}
-
-function calculateWordFrequency(sentences) {
-    const wordFreq = {};
-    for (const sentence of sentences) {
-        const words = tokenizeAndFilterWords(sentence);
-        for (const word of words) {
-            wordFreq[word] = (wordFreq[word] || 0) + 1;
-        }
-    }
-    return wordFreq;
-}
-
-function calculateSentenceScores(sentences, wordFreq) {
-    const sentenceScores = {};
-    for (const sentence of sentences) {
-        let score = 0;
-        const words = tokenizeAndFilterWords(sentence);
-        for (const word of words) {
-            score += (wordFreq[word] || 0); // Cộng tần suất của từ vào điểm của câu
-        }
-        sentenceScores[sentence] = score;
-    }
-    return sentenceScores;
-}
-
-function summarizeText(text, sentencesCount = 3) {
-    // 1. Tiền xử lý văn bản gốc
-    const cleanedText = preprocessText(text);
-
-    // 2. Tách văn bản thành các câu
-    const sentences = SentenceTokenizer.tokenize(cleanedText);
-
-    if (sentences.length <= sentencesCount) {
-        return text; // Nếu số câu yêu cầu lớn hơn hoặc bằng tổng số câu, trả về nguyên bản
-    }
-
-    // 3. Tính tần suất từ trong toàn bộ văn bản (sau khi tiền xử lý)
-    const wordFrequency = calculateWordFrequency(sentences);
-
-    // 4. Tính điểm cho mỗi câu dựa trên tần suất từ
-    const sentenceScores = calculateSentenceScores(sentences, wordFrequency);
-
-    // 5. Sắp xếp các câu theo điểm giảm dần và chọn ra số lượng câu mong muốn
-    const sortedSentences = Object.keys(sentenceScores).sort((a, b) => {
-        return sentenceScores[b] - sentenceScores[a];
-    });
-
-    // 6. Lấy N câu có điểm cao nhất
-    const topSentences = sortedSentences.slice(0, sentencesCount);
-
-    // 7. Sắp xếp lại các câu đã chọn theo thứ tự xuất hiện trong văn bản gốc
-    // Điều này quan trọng để bản tóm tắt có tính mạch lạc
-    const finalSummarySentences = [];
-    for (const originalSentence of sentences) {
-        if (topSentences.includes(originalSentence)) {
-            finalSummarySentences.push(originalSentence);
-        }
-    }
-
-    return finalSummarySentences.join(' ');
-}
-
-module.exports = summarizeText;
-
-app.get('/api/tarot', (req, res) => {
-  const randomCard = tarotData[Math.floor(Math.random() * tarotData.length)];
-  res.json(randomCard);
-});
-
-app.listen(port, () => {
-  console.log(`✅ Server is running at http://localhost:${port}`);
+// --- 5. Khởi động API Server (luôn ở cuối file) ---
+app.listen(API_PORT, () => {
+    console.log(`✅ Server API đang chạy trên cổng http://localhost:${API_PORT}`);
+    console.log(`Bạn có thể gửi POST request tới /summarize với body JSON: {"text": "Văn bản của bạn...", "sentences_count": 5}`);
+    console.log(`Hoặc truy cập các API khác như /ping, /money?number=12345, /riddle, /api/tarot`);
 });
