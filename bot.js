@@ -7,6 +7,7 @@ const path = require('path');
 const riddlesFile = path.join(__dirname, 'riddles.json');
 const fs = require('fs');
 const port = 3000;
+require('dotenv').config();
 
 app.use(cors());
 app.use(express.json());
