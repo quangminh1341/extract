@@ -10,57 +10,33 @@ const port = 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(bodyParser.json());
 
 app.get('/ping', (req, res) => {
   res.send('pong');
 });
 
-<<<<<<< HEAD
-const RAPIDAPI_HOST = process.env.RAPIDAPI_HOST; 
-const TRANSLATE_ENDPOINT = 'https://' + RAPIDAPI_HOST + '/translate';
-
-app.post('/translate', async (req, res) => {
-    const { text } = req.body;
+app.post('/summarize', (req, res) => {
+    const { text, sentences_count } = req.body;
 
     if (!text) {
-        return res.status(400).json({ error: 'Văn bản là bắt buộc trong body yêu cầu.' });
+        return res.status(400).json({ error: 'Văn bản cần tóm tắt là bắt buộc.' });
     }
 
     try {
-        const response = await axios.post(TRANSLATE_ENDPOINT,
-            {
-                q: text, 
-                target: 'en',  
-                source: 'vi' 
-            },
-            {
-                headers: {
-                    'content-type': 'application/x-www-form-urlencoded',
-                    'x-rapidapi-key': RAPIDAPI_KEY,
-                    'x-rapidapi-host': RAPIDAPI_HOST
-                }
-            }
-        );
-        const translatedText = response.data.data.translations[0].translatedText;
-
-        res.json({ translatedText: translatedText });
-
-    } catch (error) {
-        console.error('Lỗi Dịch thuật RapidAPI:', error.message);
-        if (error.response) {
-            console.error('Dữ liệu phản hồi lỗi:', error.response.data);
-            console.error('Trạng thái phản hồi lỗi:', error.response.status);
-            console.error('Tiêu đề phản hồi lỗi:', error.response.headers);
-        }
-        res.status(500).json({
-            error: 'Không thể dịch văn bản bằng RapidAPI.',
-            details: error.response ? error.response.data : error.message
+        // Gọi hàm tóm tắt văn bản
+        const summarized_text = summarizeText(text, sentences_count);
+        res.json({
+            original_text: text,
+            summarized_text: summarized_text,
+            sentences_count: sentences_count || 3 // Mặc định 3 nếu không có
         });
+    } catch (error) {
+        console.error("Lỗi khi tóm tắt văn bản:", error);
+        res.status(500).json({ error: 'Đã xảy ra lỗi trong quá trình tóm tắt.' });
     }
 });
 
-=======
->>>>>>> f06e2247c422b10ab6490493251d25c637073a96
 app.get('/money', (req, res) => {
   const numberStr = req.query.number;
   if (!numberStr) {
