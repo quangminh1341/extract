@@ -1,35 +1,23 @@
-// bot.js (Chỉ API - Tất cả các tính năng API khác được giữ lại)
-
-// --- 1. Imports các thư viện cần thiết (Luôn ở đầu file) ---
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser'); // Cần thiết cho các loại content-type phức tạp, express.json() thường đủ cho JSON
-const axios = require('axios'); // Giữ lại nếu bạn sử dụng axios trong các API khác
-const fetch = require('node-fetch'); // Giữ lại nếu bạn sử dụng node-fetch trong các API khác
+const bodyParser = require('body-parser'); 
+const axios = require('axios'); 
+const fetch = require('node-fetch'); 
 const path = require('path');
 const fs = require('fs');
-require('dotenv').config(); // Tải biến môi trường từ file .env
+require('dotenv').config();
 
-// Natural (NLP) imports cho tóm tắt văn bản
 const natural = require('natural');
 const SentenceTokenizer = new natural.SentenceTokenizer();
 const WordTokenizer = new natural.WordTokenizer();
 
-// --- 2. Khai báo các biến và hàm hỗ trợ (bao gồm logic tóm tắt và các đường dẫn file) ---
-
-// Đường dẫn đến file riddles.json
 const riddlesFile = path.join(__dirname, 'riddles.json');
-
-// Placeholder cho dữ liệu Tarot (giả định bạn có file tarot.json tương tự riddles.json)
 const tarotFile = path.join(__dirname, 'tarot.json');
-let tarotData = []; // Khởi tạo rỗng, sẽ được load sau
-
-// Hàm tải dữ liệu Tarot (gọi khi ứng dụng khởi động)
+let tarotData = [];
 function loadTarotData() {
     fs.readFile(tarotFile, 'utf8', (err, data) => {
         if (err) {
             console.error('Lỗi đọc file tarot.json:', err);
-            // Có thể tạo file rỗng nếu không tồn tại để tránh lỗi tiếp theo
             if (err.code === 'ENOENT') {
                 console.warn('File tarot.json không tìm thấy. Tạo mảng trống cho dữ liệu tarot.');
                 tarotData = [];
@@ -44,85 +32,7 @@ function loadTarotData() {
         }
     });
 }
-// Gọi hàm loadTarotData khi khởi động ứng dụng
 loadTarotData();
-
-// Danh sách Stop Words cho tóm tắt văn bản (tiếng Việt)
-const stopwords = new Set([
-    'là', 'và', 'của', 'trong', 'trên', 'với', 'một', 'những', 'các', 'đã', 'sẽ', 'không', 'có', 'được', 'từ', 'cho', 'về', 'khi', 'mà', 'này', 'ấy', 'nếu', 'như', 'tôi', 'anh', 'chị', 'em', 'chúng', 'họ', 'rằng', 'thì', 'ở', 'để', 'cũng', 'vậy', 'đi', 'lại', 'rồi', 'nhưng', 'còn', 'hay', 'ra', 'vào', 'bởi', 'do', 'đó', 'nữa', 'ai', 'gì', 'đâu', 'nào', 'chứ', 'đây', 'kia', 'sao', 'mà', 'tới', 'đến', 'theo', 'phải', 'trước', 'sau', 'trên', 'dưới', 'trong', 'ngoài', 'giữa', 'bên', 'cạnh', 'trên', 'đầu', 'cuối', 'giữa'
-]);
-
-// Hàm tiền xử lý văn bản cho tóm tắt
-function preprocessText(text) {
-    text = text.toLowerCase();
-    text = text.replace(/[^a-z0-9àáạảãâầấậẩẫăằắặẳẵèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ\s.,?!]/g, '');
-    return text;
-}
-
-// Hàm tách từ và lọc stop words
-function tokenizeAndFilterWords(sentence) {
-    return WordTokenizer.tokenize(sentence).filter(word => !stopwords.has(word));
-}
-
-// Hàm tính tần suất từ
-function calculateWordFrequency(sentences) {
-    const wordFreq = {};
-    for (const sentence of sentences) {
-        const words = tokenizeAndFilterWords(sentence);
-        for (const word of words) {
-            wordFreq[word] = (wordFreq[word] || 0) + 1;
-        }
-    }
-    return wordFreq;
-}
-
-// Hàm tính điểm cho mỗi câu
-function calculateSentenceScores(sentences, wordFreq) {
-    const sentenceScores = {};
-    for (const sentence of sentences) {
-        let score = 0;
-        const words = tokenizeAndFilterWords(sentence);
-        for (const word of words) {
-            score += (wordFreq[word] || 0);
-        }
-        sentenceScores[sentence] = score;
-    }
-    return sentenceScores;
-}
-
-// Hàm tóm tắt văn bản chính
-function summarizeText(text, sentencesCount = 3) {
-    const cleanedText = preprocessText(text);
-    const sentences = SentenceTokenizer.tokenize(cleanedText);
-
-    if (sentences.length <= sentencesCount) {
-        return text;
-    }
-
-    const wordFrequency = calculateWordFrequency(sentences);
-    const sentenceScores = calculateSentenceScores(sentences, wordFrequency);
-
-    const sortedSentences = Object.keys(sentenceScores).sort((a, b) => {
-        return sentenceScores[b] - sentenceScores[a];
-    });
-
-    const topSentences = sortedSentences.slice(0, sentencesCount);
-
-    const finalSummarySentences = [];
-    for (const originalSentence of sentences) {
-        if (topSentences.includes(originalSentence)) {
-            finalSummarySentences.push(originalSentence);
-        }
-    }
-    return finalSummarySentences.join(' ');
-}
-
-const app = express();
-const API_PORT = process.env.API_PORT || 3000; // Sử dụng API_PORT từ .env hoặc mặc định 3000
-
-app.use(cors()); 
-app.use(express.json());
-
 // API Ping
 app.get('/ping', (req, res) => {
     res.send('pong');
